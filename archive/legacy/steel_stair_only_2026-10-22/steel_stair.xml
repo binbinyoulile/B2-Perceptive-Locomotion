@@ -1,0 +1,25 @@
+<mujoco model="steel_stair">
+  <compiler angle="degree" meshdir="."/>
+  <visual>
+    <global offwidth="1280" offheight="720"/>
+    <headlight ambient="0.35 0.35 0.35" diffuse="0.7 0.7 0.7" specular="0.25 0.25 0.25"/>
+    <map znear="0.02" zfar="100"/>
+  </visual>
+  <asset>
+    <mesh name="steel_stair" file="steel_stair.STL" scale="0.001 0.001 0.001"/>
+    <texture name="grid" type="2d" builtin="checker" width="512" height="512"
+             rgb1="0.16 0.18 0.20" rgb2="0.22 0.24 0.26"/>
+    <material name="grid" texture="grid" texrepeat="8 8" reflectance="0.05"/>
+    <material name="steel" rgba="0.42 0.48 0.54 1" specular="0.75" shininess="0.7" reflectance="0.2"/>
+  </asset>
+  <worldbody>
+    <light name="key" pos="2.0 -2.0 4.0" dir="0 0 -1" directional="true"/>
+    <geom name="floor" type="plane" size="10 10 0.1" material="grid"/>
+    <!-- 绕 Z 轴旋转 90 度：楼梯长边由 X 方向改为 Y 方向。 -->
+    <body name="steel_stair" pos="0.7034 0 0" quat="0 0 0.70710678 0.70710678">
+      <geom name="steel_stair_visual" type="mesh" mesh="steel_stair" material="steel"
+            contype="0" conaffinity="0"/>
+    </body>
+  </worldbody>
+  <statistic center="0 2.043 0.468" extent="5.0"/>
+</mujoco>

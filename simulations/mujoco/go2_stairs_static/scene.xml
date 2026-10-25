@@ -1,0 +1,43 @@
+<mujoco model="Go2 on steel stair">
+  <!-- 官方 Unitree Go2 MJCF：自由基座、12 个驱动关节和碰撞体。 -->
+  <include file="go2.xml"/>
+
+  <visual>
+    <global offwidth="1280" offheight="720" azimuth="145" elevation="-22"/>
+    <headlight ambient="0.35 0.35 0.35" diffuse="0.7 0.7 0.7" specular="0.25 0.25 0.25"/>
+    <rgba haze="0.12 0.18 0.24 1"/>
+    <map znear="0.02" zfar="100"/>
+  </visual>
+
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1="0.28 0.42 0.58" rgb2="0.03 0.05 0.08" width="512" height="3072"/>
+    <texture name="grid" type="2d" builtin="checker" width="512" height="512"
+             rgb1="0.16 0.18 0.20" rgb2="0.22 0.24 0.26"/>
+    <material name="grid" texture="grid" texrepeat="12 12" reflectance="0.05"/>
+    <material name="steel" rgba="0.42 0.48 0.54 1" specular="0.75" shininess="0.7" reflectance="0.2"/>
+
+    <!-- STL 原始单位为 mm，因此缩放 0.001。 -->
+    <mesh name="steel_stair_mesh" file="steel_stair.STL" scale="0.001 0.001 0.001"/>
+  </asset>
+
+  <worldbody>
+    <light name="key" pos="2.0 -2.5 4.0" dir="0 0 -1" directional="true"/>
+    <geom name="floor" type="plane" size="20 20 0.1" material="grid"/>
+
+    <!-- 该 STL 经 MuJoCo 编译后需要绕 X 轴 +90° 才能正向立起；Y 平移用于保持宽度范围居中。 -->
+    <!-- 阶梯仅用于显示；现阶段不开网格碰撞，后续爬梯时再添加简化碰撞体。 -->
+    <body name="steel_stair" pos="0 0.936 0" quat="0.70710678 0.70710678 0 0">
+      <geom name="steel_stair_visual" type="mesh" mesh="steel_stair_mesh" material="steel"
+            contype="0" conaffinity="0"/>
+    </body>
+  </worldbody>
+
+  <keyframe>
+    <!-- 狗位于低端梯口前，朝向 +X（楼梯上升方向），采用官方 home 站姿。 -->
+    <key name="stairs_home"
+         qpos="-0.90 0.468 0.27 1 0 0 0 0 0.9 -1.8 0 0.9 -1.8 0 0.9 -1.8 0 0.9 -1.8"
+         ctrl="0 0.9 -1.8 0 0.9 -1.8 0 0.9 -1.8 0 0.9 -1.8"/>
+  </keyframe>
+
+  <statistic center="1.55 0.468 0.70" extent="5.0"/>
+</mujoco>

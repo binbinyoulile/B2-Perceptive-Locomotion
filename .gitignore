@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+.venv/
+venv/
+env/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Training outputs
+experiments/runs/*
+!experiments/runs/.gitkeep
+experiments/checkpoints/*
+!experiments/checkpoints/.gitkeep
+
+# Large/generated media
+*.mp4
+*.avi
+*.mov
+*.gif
+*.log
+tensorboard/
+wandb/
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
