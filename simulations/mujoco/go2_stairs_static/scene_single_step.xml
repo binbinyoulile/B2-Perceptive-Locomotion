@@ -1,0 +1,63 @@
+<mujoco model="Go2 single low step collision test">
+  <!-- 单级低台阶接触测试：使用同一官方 Go2，但碰撞体是课程测试台阶，不是 STL 第一级。 -->
+  <include file="../../../models/unitree_go2/go2.xml"/>
+  <compiler angle="radian" meshdir="../../../models/unitree_go2/assets" autolimits="true"/>
+
+  <visual>
+    <global offwidth="1280" offheight="720" azimuth="145" elevation="-22"/>
+    <headlight ambient="0.35 0.35 0.35" diffuse="0.7 0.7 0.7" specular="0.25 0.25 0.25"/>
+    <rgba haze="0.12 0.18 0.24 1"/>
+    <map znear="0.02" zfar="100"/>
+  </visual>
+
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1="0.28 0.42 0.58" rgb2="0.03 0.05 0.08" width="512" height="3072"/>
+    <texture name="grid" type="2d" builtin="checker" width="512" height="512"
+             rgb1="0.16 0.18 0.20" rgb2="0.22 0.24 0.26"/>
+    <material name="grid" texture="grid" texrepeat="12 12" reflectance="0.05"/>
+    <material name="steel" rgba="0.42 0.48 0.54 1" specular="0.75" shininess="0.7" reflectance="0.2"/>
+    <mesh name="steel_stair_mesh" file="../../stairs/steel_stair.STL" scale="0.001 0.001 0.001"/>
+  </asset>
+
+  <worldbody>
+    <light name="key" pos="2.0 -2.5 4.0" dir="0 0 -1" directional="true"/>
+    <!-- 地面摩擦暂按水泥—橡胶足端典型值 0.8；待老师确认或实测标定。 -->
+    <geom name="floor" type="plane" size="20 20 0.1" material="grid"
+          friction="0.8 0.02 0.01"/>
+
+    <!-- 原始楼梯 STL 仅保留视觉显示，碰撞属性关闭。 -->
+    <body name="steel_stair" pos="0 0.936 0" quat="0.70710678 0.70710678 0 0">
+      <geom name="steel_stair_visual" type="mesh" mesh="steel_stair_mesh" material="steel"
+            contype="0" conaffinity="0"/>
+    </body>
+
+    <!-- 课程测试低台阶：高 0.08 m、深 0.55 m、宽 0.80 m，四足可同时落面。 -->
+    <body name="curriculum_step_collision" pos="0 0 0">
+      <geom name="curriculum_step_01" type="box" pos="-0.875 0.468 0.04"
+            size="0.275 0.40 0.04" material="steel" friction="0.8 0.02 0.01"/>
+    </body>
+  </worldbody>
+
+  <contact>
+    <!-- 官方足端使用 priority=1 的软接触模型。为使课程低台阶上的足端不出现
+         可见穿模，这里仅为四对“足端—课程台阶”接触指定更硬的法向约束；
+         不修改原始 Go2 模型，也不影响完整楼梯场景。 -->
+    <pair geom1="FL" geom2="curriculum_step_01" solref="0.01 1"
+          solimp="0.9 0.95 0.001" friction="0.8 0.02 0.01" condim="6"/>
+    <pair geom1="FR" geom2="curriculum_step_01" solref="0.01 1"
+          solimp="0.9 0.95 0.001" friction="0.8 0.02 0.01" condim="6"/>
+    <pair geom1="RL" geom2="curriculum_step_01" solref="0.01 1"
+          solimp="0.9 0.95 0.001" friction="0.8 0.02 0.01" condim="6"/>
+    <pair geom1="RR" geom2="curriculum_step_01" solref="0.01 1"
+          solimp="0.9 0.95 0.001" friction="0.8 0.02 0.01" condim="6"/>
+  </contact>
+
+  <keyframe>
+    <!-- base_z 抬高 0.08 m 并补偿官方 home 姿态下约 18.4 mm 的初始足底穿透。 -->
+    <key name="single_step_home"
+         qpos="-0.875 0.468 0.3683725 1 0 0 0 0 0.9 -1.8 0 0.9 -1.8 0 0.9 -1.8 0 0.9 -1.8"
+         ctrl="0 0.9 -1.8 0 0.9 -1.8 0 0.9 -1.8 0 0.9 -1.8"/>
+  </keyframe>
+
+  <statistic center="0.3 0.468 0.55" extent="5.2"/>
+</mujoco>

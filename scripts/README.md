@@ -2,27 +2,14 @@
 
 | 脚本 | 作用 |
 |---|---|
-| `check_environment.py` | 检查 Python、MuJoCo、依赖、官方 Go2 模型和静态楼梯场景 |
-| `analyze_stairs_geometry.py` | 从静态场景中的 STL 提取可落脚面并生成几何估计 JSON |
-
-## 环境检查
-
-```powershell
-D:\Python313\python.exe "D:\桌面\机器狗\scripts\check_environment.py"
-```
-
-也可以双击项目根目录的 `检查项目环境.bat`。
-
-## 楼梯几何提取
+| `check_environment.py` | 检查依赖、根目录模型资产、场景编译和初始接触 |
+| `validate_collision_scenes.py` | 验证完整钢梯和单级台阶的碰撞几何与动力学接触 |
+| `analyze_stairs_geometry.py` | 从原始 STL 重建楼梯几何 JSON |
 
 ```powershell
-D:\Python313\python.exe "D:\桌面\机器狗\scripts\analyze_stairs_geometry.py"
+D:\Python313\python.exe D:\桌面\机器狗\scripts\check_environment.py
+D:\Python313\python.exe D:\桌面\机器狗\scripts\validate_collision_scenes.py
+D:\Python313\python.exe D:\桌面\机器狗\scripts\analyze_stairs_geometry.py
 ```
 
-输出文件：
-
-```text
-D:\桌面\机器狗\models\stairs\geometry_estimate.json
-```
-
-MuJoCo 相关脚本必须在对应 XML 目录中使用相对路径加载模型，以避开当前 Windows 版本对中文绝对路径的兼容问题。
+MuJoCo 脚本先切换到对应 XML 目录，再使用相对路径加载，避免 Windows 中文绝对路径兼容问题。

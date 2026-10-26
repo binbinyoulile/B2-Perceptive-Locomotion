@@ -1,6 +1,0 @@
-.*
-!.gitignore
-/exp
-imu_values*
-*.zip
-/build

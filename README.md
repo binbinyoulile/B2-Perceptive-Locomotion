@@ -1,111 +1,85 @@
-# 宇树 Go2 机器狗项目
+# Unitree Go2 楼梯强化学习项目
 
-面向两项主要任务的 Go2 仿真与控制研究项目：
+基于 MuJoCo 的 Unitree Go2 四足机器人楼梯运动研究项目。最终目标是让机器狗在仿真中稳定完成连续上行、平台通过和下行，再逐步迁移到真实 Go2。
 
-1. 机器狗上下楼梯的 MuJoCo 仿真；
-2. 机器狗运动控制强化学习的学习、训练与仿真实践。
+当前属于**阶段 0：可重复实时仿真基线**。场景中只有官方 Go2 和完整钢梯；一键入口会依次完成：
 
-当前阶段只做项目整理、环境固化、可复现场景和技术路线准备，不开始训练或楼梯越障算法。
+```text
+稳定站立 -> 平地 Trot 接近钢梯 -> 楼梯前停稳站立
+```
 
-## 当前状态
+窗口和物理仿真会继续运行，不重播、不重置、不自动关闭。当前**尚未实现上楼梯**。
 
-- 官方 Unitree Go2 MuJoCo 模型已归档并验证。
-- 钢制楼梯原始 STL、正确立式姿态和 Go2 + 楼梯静态场景已归档并验证。
-- 已从 STL 提取楼梯可落脚面：3 级上行、2.5 m 平台、3 级下行。
-- 已归档 `go2_gait_planner` 作为步态与控制参考，但尚未集成。
-- 已归档 `go2_omniverse` 作为 IsaacLab/RL 参考，但不作为当前 MuJoCo 主链路。
-- 已建立仿真、强化学习、实验记录、数据集和历史归档目录。
-- 已提供环境检查、楼梯几何提取、场景验证和预览生成脚本。
+![Go2 与完整钢梯](simulations/mujoco/go2_stairs_static/preview.png)
 
-![Go2 与楼梯静态场景](simulations/mujoco/go2_stairs_static/preview.png)
+## 一键实时运行
 
-## 目录结构
+```powershell
+cd D:\桌面\机器狗; D:\Python313\python.exe .\run_demo.py
+```
+
+环境依赖记录在 `requirements-static.txt`。当前机器直接使用全局 Python，不需要创建或激活虚拟环境。关闭 3D 窗口或按 `Ctrl+C` 结束。
+
+无窗口回归验证：
+
+```powershell
+cd D:\桌面\机器狗; D:\Python313\python.exe .\run_demo.py --headless --duration 11
+```
+
+## 当前已完成
+
+- 官方 Unitree Go2 MJCF，`nq/nv/nu = 19/18/12`。
+- 完整钢梯 STL 视觉模型，STL 不参与碰撞。
+- 49 个分类 box 碰撞体：7 个薄落脚面、支撑柱、侧梁、横撑和栏杆。
+- 平地 PD 站立基线、开环 Trot 基线、0.08 m 单级台阶课程场景。
+- 单进程实时 3D 演示；运动结束后机器狗在楼梯前持续站立。
+- 环境检查、楼梯几何提取、碰撞与初始接触回归脚本。
+
+## 目录
 
 ```text
 机器狗/
-├─ docs/                         项目计划、学习路线、环境和资料说明
+├─ run_demo.py                    唯一用户级实时仿真入口
 ├─ models/
-│  ├─ unitree_go2/               MuJoCo Menagerie 官方 Go2 模型
-│  └─ stairs/                    楼梯原始 STL、几何估计和说明
-├─ simulations/
-│  └─ mujoco/
-│     └─ go2_stairs_static/      当前可运行的静态 Go2 + 楼梯场景
-├─ control/
-│  └─ upstream/
-│     └─ go2_gait_planner/       外部步态规划参考工程
-├─ reinforcement_learning/
-│  ├─ src/                       后续自研 Gymnasium/RL 代码
-│  ├─ configs/                   后续训练和课程配置
-│  └─ upstream/go2_omniverse/    IsaacLab/RL 外部参考工程
-├─ datasets/                     后续地形、轨迹和评测数据
-├─ experiments/                  训练运行、检查点与报告
-├─ scripts/                      环境检查和项目辅助脚本
-└─ archive/legacy/               历史版本与旧项目资料
+│  ├─ unitree_go2/                唯一的官方 Go2 MJCF、OBJ 和许可证
+│  └─ stairs/                     原始钢梯 STL、几何 JSON 和来源说明
+├─ simulations/mujoco/
+│  ├─ go2_stairs_static/          完整钢梯场景、单级台阶场景和预览图
+│  └─ go2_stand_flat/             PD 站立、开环 Trot 控制基线
+├─ scripts/                       环境检查、几何提取和碰撞场景验证
+├─ reinforcement_learning/       后续 Gymnasium 环境、训练配置与测试
+├─ datasets/                      后续地形与轨迹数据
+├─ experiments/                   训练运行、检查点和评测报告
+└─ docs/                          路线图、环境、几何、决策与待确认事项
 ```
 
-## 快速检查
+`schema` 说明：`models/` 保存不可随意修改的原始资产；`simulations/` 保存场景和控制实验；根目录 `run_demo.py` 只负责展示，不承担训练逻辑。
 
-双击项目根目录的 `检查项目环境.bat`，或运行：
+## 验证
 
 ```powershell
-D:\Python313\python.exe "D:\桌面\机器狗\scripts\check_environment.py"
+D:\Python313\python.exe .\scripts\check_environment.py
+D:\Python313\python.exe .\scripts\validate_collision_scenes.py
+D:\Python313\python.exe .\scripts\analyze_stairs_geometry.py
 ```
 
-该脚本会检查 Python、MuJoCo、NumPy、Pillow、官方 Go2 模型、静态场景、楼梯姿态、世界尺寸和初始接地状态，并列出尚未安装的强化学习依赖。
+- `check_environment.py`：依赖、根模型资产、场景编译、关键帧和视觉碰撞开关。
+- `validate_collision_scenes.py`：49 个碰撞体、7 个落脚面、真实缝隙、平台净空、单级台阶短时接触。
+- `analyze_stairs_geometry.py`：从 STL 重建 `models/stairs/geometry_estimate.json`。
 
-重新提取楼梯几何：
+## 后续强化学习路线
 
-```powershell
-D:\Python313\python.exe "D:\桌面\机器狗\scripts\analyze_stairs_geometry.py"
-```
+1. **Gymnasium 环境**：12 维关节动作，固定控制频率，建立随机动作和站立动作自检。
+2. **平地闭环**：速度跟踪、姿态稳定、动作平滑和多种子评测。
+3. **单级低台阶**：先 0.08 m，再提升到 0.12～0.15 m。
+4. **完整钢梯课程**：平地 → 小坡 → 单级 → 多级 → 缩放楼梯 → 上行 → 平台 → 下行。
+5. **域随机化**：摩擦、质量、质心、电机强度、控制延迟和传感器噪声。
+6. **统一评测与真机准备**：成功率、完成时间、跌倒率、足端滑移、能耗和关节跟踪误差。
 
-验证静态场景：
+详细阶段、验收标准和风险见 [项目计划](docs/PROJECT_PLAN.md)，学习顺序见 [强化学习学习路线](docs/LEARNING_ROADMAP.md)。
 
-```powershell
-cd "D:\桌面\机器狗\simulations\mujoco\go2_stairs_static"
-D:\Python313\python.exe validate.py
-```
+## 模型与来源
 
-打开静态场景：双击 `打开Go2楼梯场景.bat`。
-
-## 关键文档
-
-- [项目总体路线图](docs/PROJECT_PLAN.md)
-- [楼梯几何估计](docs/STAIR_GEOMETRY.md)
-- [强化学习学习路线](docs/LEARNING_ROADMAP.md)
-- [环境与运行说明](docs/ENVIRONMENT.md)
-- [资料与来源清单](docs/SOURCE_CATALOG.md)
-- [优先阅读资料](docs/READING_LIST.md)
-- [技术决策记录](docs/DECISION_LOG.md)
-- [辅助脚本说明](scripts/README.md)
-
-## 推荐工作顺序
-
-1. 固化环境检查流程并建立 Git 基线。
-2. 学习 MuJoCo 基础 API、坐标系、四足运动学、接触与执行器。
-3. 建立平地低层控制器基线，先做到稳定站立，再尝试小跑步态。
-4. 依据已测量的几何建立楼梯简化碰撞体，并验证足端落脚。
-5. 在平地上完成第一版 Gymnasium 强化学习环境和 PPO 训练闭环。
-6. 用“平地 → 低台阶 → 多级台阶 → 缩小楼梯 → 完整楼梯”的课程逐步增加难度。
-7. 统一评测成功率、时间、能耗、脚滑、跌倒和鲁棒性，并形成报告。
-
-## 重要约定
-
-- `models/` 存放原始或官方模型，不作为实验改动的直接工作区。
-- `simulations/` 存放可直接运行的场景；训练场景与静态展示场景分开。
-- `reinforcement_learning/` 存放自研环境、算法和配置；控制类外部代码放在 `control/upstream/`，RL/IsaacLab 类外部代码放在 `reinforcement_learning/upstream/`。
-- `experiments/` 中的训练结果不手工覆盖；每次运行使用独立目录。
-- 楼梯整体 STL 不直接开启碰撞，后续必须建立简化碰撞体。
-- 重要模型和配置变更要记录来源、日期和验证结果。
-
-## Windows 中文路径说明
-
-当前 Python MuJoCo 接口无法稳定直接打开含中文的绝对 XML 路径。项目内脚本会先切换到 XML 所在目录，再使用相对路径加载，因此当前目录可以直接运行。后续接入 WSL、JAX/MJX 或其他训练框架时，需要重新验证中文路径兼容性；如遇问题，可为项目建立 ASCII 路径别名。
-
-## 当前未完成
-
-- 楼梯尺寸估计已完成；逐级碰撞体尚未建立，正式 CAD 尺寸仍待确认。
-- 尚无站立平衡、步态控制或强化学习控制器。
-- 尚未安装 Gymnasium、PyTorch、Stable-Baselines3、JAX/MJX 等训练依赖。
-- `go2_gait_planner` 的 ROS2 构建尚未验证，许可证声明仍不明确，仅作为参考。
-- `go2_omniverse` 依赖 Isaac Sim/IsaacLab 和 Linux/ROS2，当前只归档不运行。
+- Go2 MJCF 原始说明与许可证：`models/unitree_go2/README.md`、`models/unitree_go2/LICENSE`（BSD-3-Clause）。
+- 钢梯 STL 为用户提供的原始几何，保存在 `models/stairs/steel_stair.STL`；派生尺寸和哈希见 `models/stairs/geometry_estimate.json`。
+- 不在场景目录重复保存 OBJ/STL。修改路径时只改 `simulations/mujoco/*/scene*.xml`，不要修改官方模型资产。

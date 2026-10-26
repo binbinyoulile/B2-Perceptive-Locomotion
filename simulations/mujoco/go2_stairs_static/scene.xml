@@ -1,6 +1,7 @@
-<mujoco model="Go2 on steel stair">
+<mujoco model="Go2 on open steel stair with simplified collision">
   <!-- 官方 Unitree Go2 MJCF：自由基座、12 个驱动关节和碰撞体。 -->
-  <include file="go2.xml"/>
+  <include file="../../../models/unitree_go2/go2.xml"/>
+  <compiler angle="radian" meshdir="../../../models/unitree_go2/assets" autolimits="true"/>
 
   <visual>
     <global offwidth="1280" offheight="720" azimuth="145" elevation="-22"/>
@@ -17,23 +18,196 @@
     <material name="steel" rgba="0.42 0.48 0.54 1" specular="0.75" shininess="0.7" reflectance="0.2"/>
 
     <!-- STL 原始单位为 mm，因此缩放 0.001。 -->
-    <mesh name="steel_stair_mesh" file="steel_stair.STL" scale="0.001 0.001 0.001"/>
+    <mesh name="steel_stair_mesh" file="../../stairs/steel_stair.STL" scale="0.001 0.001 0.001"/>
   </asset>
 
   <worldbody>
     <light name="key" pos="2.0 -2.5 4.0" dir="0 0 -1" directional="true"/>
-    <geom name="floor" type="plane" size="20 20 0.1" material="grid"/>
+    <!-- 地面摩擦暂按水泥—橡胶足端典型值 0.8；待现场实测标定。 -->
+    <geom name="floor" type="plane" size="20 20 0.1" material="grid"
+          friction="0.8 0.02 0.01"/>
 
     <!-- 该 STL 经 MuJoCo 编译后需要绕 X 轴 +90° 才能正向立起；Y 平移用于保持宽度范围居中。 -->
-    <!-- 阶梯仅用于显示；现阶段不开网格碰撞，后续爬梯时再添加简化碰撞体。 -->
+    <!-- 视觉 STL 保留显示，但 contype/conaffinity=0，绝不直接参与楼梯碰撞。 -->
     <body name="steel_stair" pos="0 0.936 0" quat="0.70710678 0.70710678 0 0">
       <geom name="steel_stair_visual" type="mesh" mesh="steel_stair_mesh" material="steel"
             contype="0" conaffinity="0"/>
     </body>
+
+
+    <!-- 楼梯碰撞体集中放在独立 body 中，便于回归脚本统计和后续按类别开关。
+         踏面/平台只建 20 mm 薄板，板下保持镂空；斜侧梁和斜栏杆使用绕 Y 轴旋转的薄 box。
+         钢结构摩擦暂取不锈钢/铁典型值 0.6/0.02/0.01，未现场标定。 -->
+    <body name="steel_stair_collision" pos="0 0 0">
+      <!-- 上行第 1 级：STL 踏面 x=0.2166..0.3966 m、z_top=0.1950 m；碰撞板厚 20 mm。 -->
+      <geom name="up_step_1" type="box" pos="0.306570 0.468000 0.185000"
+            size="0.090000 0.355000 0.010000" material="steel" group="3"
+            friction="0.8 0.02 0.01"/>
+
+      <!-- 上行第 2 级：STL 踏面 x=0.4018..0.5818 m、z_top=0.3803 m；与第 1 级之间保留约 5.26 mm 真实缝隙。 -->
+      <geom name="up_step_2" type="box" pos="0.491832 0.468000 0.370300"
+            size="0.090000 0.355000 0.010000" material="steel" group="3"
+            friction="0.8 0.02 0.01"/>
+
+      <!-- 上行第 3 级：STL 踏面 x=0.5871..0.7671 m、z_top=0.5655 m；与第 2 级之间保留约 5.26 mm 真实缝隙。 -->
+      <geom name="up_step_3" type="box" pos="0.677094 0.468000 0.555500"
+            size="0.090000 0.355000 0.010000" material="steel" group="3"
+            friction="0.8 0.02 0.01"/>
+
+      <!-- 中间平台：STL 平台 x=0.7934..3.2934 m、z_top=0.7900 m；只建 20 mm 顶板，平台下方不填实。 -->
+      <geom name="platform" type="box" pos="2.043433 0.468000 0.780000"
+            size="1.250000 0.400000 0.010000" material="steel" group="3"
+            friction="0.8 0.02 0.01"/>
+
+      <!-- 下行第 1 级：STL 踏面 x=3.3198..3.4998 m、z_top=0.5655 m；与平台端部保留真实横缝。 -->
+      <geom name="down_step_1" type="box" pos="3.409772 0.468000 0.555500"
+            size="0.090000 0.355000 0.010000" material="steel" group="3"
+            friction="0.8 0.02 0.01"/>
+
+      <!-- 下行第 2 级：STL 踏面 x=3.5050..3.6850 m、z_top=0.3803 m；与上一级保留约 5.26 mm 真实缝隙。 -->
+      <geom name="down_step_2" type="box" pos="3.595034 0.468000 0.370300"
+            size="0.090000 0.355000 0.010000" material="steel" group="3"
+            friction="0.8 0.02 0.01"/>
+
+      <!-- 下行第 3 级：STL 踏面 x=3.6903..3.8703 m、z_top=0.1950 m；与上一级保留约 5.26 mm 真实缝隙。 -->
+      <geom name="down_step_3" type="box" pos="3.780296 0.468000 0.185000"
+            size="0.090000 0.355000 0.010000" material="steel" group="3"
+            friction="0.8 0.02 0.01"/>
+
+      <!-- 平台四根钢立柱：贴近平台前后边缘，阻止机器人从平台下方或侧面穿过。 -->
+      <geom name="support_column_left_01" type="box" pos="1.343430 0.045500 0.395000"
+            size="0.040000 0.022500 0.375000" material="steel" group="3"
+            friction="0.6 0.02 0.01"/>
+      <geom name="support_column_right_01" type="box" pos="1.343430 0.890500 0.395000"
+            size="0.040000 0.022500 0.375000" material="steel" group="3"
+            friction="0.6 0.02 0.01"/>
+      <geom name="support_column_left_02" type="box" pos="2.743430 0.045500 0.395000"
+            size="0.040000 0.022500 0.375000" material="steel" group="3"
+            friction="0.6 0.02 0.01"/>
+      <geom name="support_column_right_02" type="box" pos="2.743430 0.890500 0.395000"
+            size="0.040000 0.022500 0.375000" material="steel" group="3"
+            friction="0.6 0.02 0.01"/>
+
+      <!-- 平台两根纵向侧梁：对应平台顶板下方的两侧主梁。 -->
+      <geom name="platform_side_beam_left" type="box" pos="2.043433 0.090500 0.730000"
+            size="1.250000 0.022500 0.040000" material="steel" group="3"
+            friction="0.6 0.02 0.01"/>
+      <geom name="platform_side_beam_right" type="box" pos="2.043433 0.845500 0.730000"
+            size="1.250000 0.022500 0.040000" material="steel" group="3"
+            friction="0.6 0.02 0.01"/>
+
+      <!-- 平台四根横向承托梁：连接两侧主梁；不填补平台中央空间。 -->
+      <geom name="platform_cross_beam_01" type="box" pos="0.815930 0.468000 0.730000"
+            size="0.022500 0.400000 0.040000" material="steel" group="3"
+            friction="0.6 0.02 0.01"/>
+      <geom name="platform_cross_beam_02" type="box" pos="1.615930 0.468000 0.730000"
+            size="0.022500 0.394500 0.040000" material="steel" group="3"
+            friction="0.6 0.02 0.01"/>
+      <geom name="platform_cross_beam_03" type="box" pos="2.515930 0.468000 0.730000"
+            size="0.022500 0.394500 0.040000" material="steel" group="3"
+            friction="0.6 0.02 0.01"/>
+      <geom name="platform_cross_beam_04" type="box" pos="3.270930 0.468000 0.730000"
+            size="0.022500 0.400000 0.040000" material="steel" group="3"
+            friction="0.6 0.02 0.01"/>
+
+      <!-- 上行斜侧梁：沿 +X 方向升高，中心线约绕 Y 轴 -45°；整体上移 4.87 mm 使 AABB 底边贴地。 -->
+      <geom name="up_side_beam_left" type="box" pos="0.435000 0.090500 0.399870"
+            size="0.525500 0.022500 0.040000" material="steel" group="3"
+            euler="0 -0.785398 0" friction="0.6 0.02 0.01"/>
+      <geom name="up_side_beam_right" type="box" pos="0.435000 0.845500 0.399870"
+            size="0.525500 0.022500 0.040000" material="steel" group="3"
+            euler="0 -0.785398 0" friction="0.6 0.02 0.01"/>
+
+      <!-- 下行斜侧梁：沿 +X 方向降低，中心线约绕 Y 轴 +45°；整体上移 4.87 mm 使 AABB 底边贴地。 -->
+      <geom name="down_side_beam_left" type="box" pos="3.651865 0.090500 0.399870"
+            size="0.525500 0.022500 0.040000" material="steel" group="3"
+            euler="0 0.785398 0" friction="0.6 0.02 0.01"/>
+      <geom name="down_side_beam_right" type="box" pos="3.651865 0.845500 0.399870"
+            size="0.525500 0.022500 0.040000" material="steel" group="3"
+            euler="0 0.785398 0" friction="0.6 0.02 0.01"/>
+
+      <!-- 平台栏杆：两根沿 X 方向的水平横杆，左右各一组。 -->
+      <geom name="platform_top_rail_left" type="box" pos="2.043430 0.090500 1.390000"
+            size="1.081980 0.016850 0.016850" material="steel" group="3"
+            friction="0.6 0.02 0.01"/>
+      <geom name="platform_top_rail_right" type="box" pos="2.043430 0.845500 1.390000"
+            size="1.081980 0.016850 0.016850" material="steel" group="3"
+            friction="0.6 0.02 0.01"/>
+      <geom name="platform_mid_rail_left" type="box" pos="2.039250 0.090500 1.040000"
+            size="1.077800 0.016850 0.016850" material="steel" group="3"
+            friction="0.6 0.02 0.01"/>
+      <geom name="platform_mid_rail_right" type="box" pos="2.039250 0.845500 1.040000"
+            size="1.077800 0.016850 0.016850" material="steel" group="3"
+            friction="0.6 0.02 0.01"/>
+
+      <!-- 上行栏杆：沿楼梯坡度布置的上横杆和中横杆，左右各一组。 -->
+      <geom name="up_rail_top_left" type="box" pos="0.563495 0.090500 0.994935"
+            size="0.572650 0.016850 0.016850" material="steel" group="3"
+            euler="0 -0.785398 0" friction="0.6 0.02 0.01"/>
+      <geom name="up_rail_top_right" type="box" pos="0.563495 0.845500 0.994935"
+            size="0.572650 0.016850 0.016850" material="steel" group="3"
+            euler="0 -0.785398 0" friction="0.6 0.02 0.01"/>
+      <geom name="up_rail_mid_left" type="box" pos="0.572050 0.090500 0.644935"
+            size="0.568900 0.016850 0.016850" material="steel" group="3"
+            euler="0 -0.795870 0" friction="0.6 0.02 0.01"/>
+      <geom name="up_rail_mid_right" type="box" pos="0.572050 0.845500 0.644935"
+            size="0.568900 0.016850 0.016850" material="steel" group="3"
+            euler="0 -0.795870 0" friction="0.6 0.02 0.01"/>
+
+      <!-- 下行栏杆：沿下楼坡度布置的上横杆和中横杆，左右各一组。 -->
+      <geom name="down_rail_top_left" type="box" pos="3.523365 0.090500 0.994935"
+            size="0.572650 0.016850 0.016850" material="steel" group="3"
+            euler="0 0.785398 0" friction="0.6 0.02 0.01"/>
+      <geom name="down_rail_top_right" type="box" pos="3.523365 0.845500 0.994935"
+            size="0.572650 0.016850 0.016850" material="steel" group="3"
+            euler="0 0.785398 0" friction="0.6 0.02 0.01"/>
+      <geom name="down_rail_mid_left" type="box" pos="3.518430 0.090500 0.640000"
+            size="0.568900 0.016850 0.016850" material="steel" group="3"
+            euler="0 0.795870 0" friction="0.6 0.02 0.01"/>
+      <geom name="down_rail_mid_right" type="box" pos="3.518430 0.845500 0.640000"
+            size="0.568900 0.016850 0.016850" material="steel" group="3"
+            euler="0 0.795870 0" friction="0.6 0.02 0.01"/>
+
+      <!-- 平台栏杆立柱：四组左右对称的竖向碰撞件，与上下横杆共同限制机身侧向越界。 -->
+      <geom name="platform_rail_post_left_01" type="box" pos="0.968430 0.090500 1.080000"
+            size="0.016850 0.016850 0.310000" material="steel" group="3" friction="0.6 0.02 0.01"/>
+      <geom name="platform_rail_post_right_01" type="box" pos="0.968430 0.845500 1.080000"
+            size="0.016850 0.016850 0.310000" material="steel" group="3" friction="0.6 0.02 0.01"/>
+      <geom name="platform_rail_post_left_02" type="box" pos="1.668430 0.090500 1.080000"
+            size="0.016850 0.016850 0.310000" material="steel" group="3" friction="0.6 0.02 0.01"/>
+      <geom name="platform_rail_post_right_02" type="box" pos="1.668430 0.845500 1.080000"
+            size="0.016850 0.016850 0.310000" material="steel" group="3" friction="0.6 0.02 0.01"/>
+      <geom name="platform_rail_post_left_03" type="box" pos="2.418430 0.090500 1.080000"
+            size="0.016850 0.016850 0.310000" material="steel" group="3" friction="0.6 0.02 0.01"/>
+      <geom name="platform_rail_post_right_03" type="box" pos="2.418430 0.845500 1.080000"
+            size="0.016850 0.016850 0.310000" material="steel" group="3" friction="0.6 0.02 0.01"/>
+      <geom name="platform_rail_post_left_04" type="box" pos="3.118430 0.090500 1.080000"
+            size="0.016850 0.016850 0.310000" material="steel" group="3" friction="0.6 0.02 0.01"/>
+      <geom name="platform_rail_post_right_04" type="box" pos="3.118430 0.845500 1.080000"
+            size="0.016850 0.016850 0.310000" material="steel" group="3" friction="0.6 0.02 0.01"/>
+
+      <!-- 楼梯栏杆立柱：上行、下行各两根，左右对称，补齐横杆与侧梁之间的支承。 -->
+      <geom name="up_rail_post_left_01" type="box" pos="0.168430 0.090500 0.362565"
+            size="0.016850 0.016850 0.234415" material="steel" group="3" friction="0.6 0.02 0.01"/>
+      <geom name="up_rail_post_right_01" type="box" pos="0.168430 0.845500 0.362565"
+            size="0.016850 0.016850 0.234415" material="steel" group="3" friction="0.6 0.02 0.01"/>
+      <geom name="up_rail_post_left_02" type="box" pos="0.568430 0.090500 0.815000"
+            size="0.016850 0.016850 0.174420" material="steel" group="3" friction="0.6 0.02 0.01"/>
+      <geom name="up_rail_post_right_02" type="box" pos="0.568430 0.845500 0.815000"
+            size="0.016850 0.016850 0.174420" material="steel" group="3" friction="0.6 0.02 0.01"/>
+      <geom name="down_rail_post_left_01" type="box" pos="3.518430 0.090500 0.815000"
+            size="0.016850 0.016850 0.174420" material="steel" group="3" friction="0.6 0.02 0.01"/>
+      <geom name="down_rail_post_right_01" type="box" pos="3.518430 0.845500 0.815000"
+            size="0.016850 0.016850 0.174420" material="steel" group="3" friction="0.6 0.02 0.01"/>
+      <geom name="down_rail_post_left_02" type="box" pos="3.918430 0.090500 0.362565"
+            size="0.016850 0.016850 0.234415" material="steel" group="3" friction="0.6 0.02 0.01"/>
+      <geom name="down_rail_post_right_02" type="box" pos="3.918430 0.845500 0.362565"
+            size="0.016850 0.016850 0.234415" material="steel" group="3" friction="0.6 0.02 0.01"/>
+    </body>
   </worldbody>
 
   <keyframe>
-    <!-- 狗位于低端梯口前，朝向 +X（楼梯上升方向），采用官方 home 站姿。 -->
+    <!-- Go2 位于楼梯低端前方并朝向 +X，采用已验证的站立初始姿态。 -->
     <key name="stairs_home"
          qpos="-0.90 0.468 0.27 1 0 0 0 0 0.9 -1.8 0 0.9 -1.8 0 0.9 -1.8 0 0.9 -1.8"
          ctrl="0 0.9 -1.8 0 0.9 -1.8 0 0.9 -1.8 0 0.9 -1.8"/>
