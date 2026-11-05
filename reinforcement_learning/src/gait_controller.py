@@ -218,9 +218,13 @@ class GaitMixin:
         hip_rad = (
             TROT_HIP_AMPLITUDE_RAD * TROT_HIP_SIGNS * oscillation * ramp
         )
-        thigh_rad = 0.9 + TROT_THIGH_AMPLITUDE_RAD * oscillation * ramp
+        # 站立基准取自 configs/robot_config.py 的 stand_joint_rad（hip/thigh/calf），
+        # 不再硬编码 0.9/-1.8，换机器人时无需改步态公式。
+        stand_thigh_rad = float(STAND_JOINT_RAD[1])
+        stand_calf_rad = float(STAND_JOINT_RAD[2])
+        thigh_rad = stand_thigh_rad + TROT_THIGH_AMPLITUDE_RAD * oscillation * ramp
         calf_rad = (
-            -1.8
+            stand_calf_rad
             + TROT_CALF_AMPLITUDE_RAD * oscillation * ramp
             - TROT_SWING_KNEE_GAIN_RAD_PER_M * TROT_SWING_HEIGHT_M * swing * ramp
         )

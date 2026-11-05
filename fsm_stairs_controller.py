@@ -53,6 +53,10 @@ from terrain_perception import (  # noqa: E402
 # 与 Gym 环境共用同一个 B1 登顶判定状态机（四足不同帧接触 + 连续驻留），
 # 保证“规则教师说 DONE”和“环境说 success”不会出现两套标准。
 from terrain_task import PlatformDwellTracker  # noqa: E402
+# 机器人硬件参数唯一来源；下方常量全部从这里派生，不再各写一份字面量。
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+from configs.robot_config import GO2_ROBOT  # noqa: E402
 
 
 SCENE_DIR = ROOT_DIR / "simulations" / "mujoco" / "go2_stairs_static"
@@ -61,28 +65,21 @@ SCENE_CONFIGS = {
     "full": ("scene_full_lidar.xml", "stairs_home"),
 }
 
-JOINT_NAMES = (
-    "FL_hip_joint", "FL_thigh_joint", "FL_calf_joint",
-    "FR_hip_joint", "FR_thigh_joint", "FR_calf_joint",
-    "RL_hip_joint", "RL_thigh_joint", "RL_calf_joint",
-    "RR_hip_joint", "RR_thigh_joint", "RR_calf_joint",
-)
-FOOT_GEOM_NAMES = ("FL", "FR", "RL", "RR")
-LEG_NAMES = ("FL", "FR", "RL", "RR")
-HIP_X_M = np.array((0.1934, 0.1934, -0.1934, -0.1934), dtype=np.float64)
-HIP_Y_M = np.array((0.0465, -0.0465, 0.0465, -0.0465), dtype=np.float64)
-LEG_THIGH_Y_OFFSET_M = np.array(
-    (0.0955, -0.0955, 0.0955, -0.0955), dtype=np.float64
-)
-NOMINAL_FOOT_Y_M = np.array((0.1420, -0.1420, 0.1420, -0.1420), dtype=np.float64)
-STAND_JOINT_RAD = np.tile(np.array((0.0, 0.9, -1.8)), 4)
-THIGH_LENGTH_M = 0.213
-CALF_LENGTH_M = 0.213
-FOOT_RADIUS_M = 0.022
-CONTROL_HZ = 50.0
+JOINT_NAMES = GO2_ROBOT.joint_names
+FOOT_GEOM_NAMES = GO2_ROBOT.foot_geom_names
+LEG_NAMES = GO2_ROBOT.foot_geom_names
+HIP_X_M = np.array(GO2_ROBOT.hip_x_m, dtype=np.float64)
+HIP_Y_M = np.array(GO2_ROBOT.hip_y_m, dtype=np.float64)
+LEG_THIGH_Y_OFFSET_M = np.array(GO2_ROBOT.thigh_y_offset_m, dtype=np.float64)
+NOMINAL_FOOT_Y_M = np.array(GO2_ROBOT.nominal_foot_y_m, dtype=np.float64)
+STAND_JOINT_RAD = GO2_ROBOT.stand_pose()
+THIGH_LENGTH_M = GO2_ROBOT.thigh_length_m
+CALF_LENGTH_M = GO2_ROBOT.calf_length_m
+FOOT_RADIUS_M = GO2_ROBOT.foot_radius_m
+CONTROL_HZ = GO2_ROBOT.fsm.control_hz
 CONTROL_DT_S = 1.0 / CONTROL_HZ
-PD_KP = np.tile(np.array((130.0, 144.0, 144.0)), 4)
-PD_KD = np.tile(np.array((2.7, 3.5, 3.5)), 4)
+PD_KP = np.array(GO2_ROBOT.fsm.pd_kp, dtype=np.float64)
+PD_KD = np.array(GO2_ROBOT.fsm.pd_kd, dtype=np.float64)
 STATE_BLEND_TIME_S = 0.42
 # 机身横滚安全阈值，单位 rad。准静态爬阶中单腿摆动不应把机体横滚推到
 # 35° 以上；超过该值时继续执行摆腿只会让足端锚点和 IK 同时失真，因此
@@ -102,7 +99,7 @@ QUASI_STANCE_SETTLE_S = 0.12
 # 稳定承重。1.0 表示完整补偿 ``qfrc_bias``；典型值 0.8~1.0，过大可能在
 # 落地瞬间产生上冲，过小则保持高度能力不足。该前馈只写入 12 个关节电机，
 # 不向自由基座施加任何外力。
-GRAVITY_FEEDFORWARD_SCALE = 1.0
+GRAVITY_FEEDFORWARD_SCALE = GO2_ROBOT.fsm.gravity_feedforward_scale
 # CRAWL 时通过移动支撑足目标来平移机身重心，单位 m。抬前腿时机身需要
 # 后移，抬后腿时需要前移；抬左腿时还需要右移，抬右腿时相反。支撑足目标
 # 始终朝“补全后的三足支撑三角形重心”反向偏移。数值过小会侧翻，过大则

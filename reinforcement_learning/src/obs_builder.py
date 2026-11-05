@@ -63,7 +63,21 @@ OBSERVATION_LAYOUT = {
     "joint_limit_distance_rad": slice(163, 175),
 }
 TERRAIN_HEIGHTMAP_DIM = HEIGHTMAP_ROWS * HEIGHTMAP_COLS
-OBSERVATION_DIM = 175
+# 观测维度不再写死 175：由布局切片推导，并要求切片连续无空洞。
+# 这样新增字段时只改 OBSERVATION_LAYOUT 一处；若布局被改坏，导入即报错，
+# 避免训练/回放悄悄用错维度。
+_SLICES = sorted(
+    OBSERVATION_LAYOUT.items(), key=lambda item: item[1].start
+)
+_expected_start = 0
+for _name, _slice in _SLICES:
+    if _slice.start != _expected_start:
+        raise RuntimeError(
+            f"观测布局不连续：{_name} 从 {_slice.start} 开始，"
+            f"应为 {_expected_start}"
+        )
+    _expected_start = _slice.stop
+OBSERVATION_DIM = _expected_start
 
 
 def get_foot_local_positions(env) -> np.ndarray:

@@ -110,6 +110,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+# 机器人硬件相关参数唯一来源。改机器人只改 configs/robot_config.py。
+from configs.robot_config import GO2_ROBOT  # noqa: E402
+
 SINGLE_STEP_SCENE_PATH = (
     PROJECT_ROOT
     / "simulations"
@@ -140,13 +143,9 @@ DEFAULT_STEP_HEIGHT_RANDOMIZATION_M = 0.005
 DEFAULT_HEIGHTMAP_NOISE_STD_M = 0.005
 
 # 顺序与官方 go2.xml 的 12 个执行器一致；启动时按名称逐个校验。
-JOINT_NAMES = (
-    "FL_hip_joint", "FL_thigh_joint", "FL_calf_joint",
-    "FR_hip_joint", "FR_thigh_joint", "FR_calf_joint",
-    "RL_hip_joint", "RL_thigh_joint", "RL_calf_joint",
-    "RR_hip_joint", "RR_thigh_joint", "RR_calf_joint",
-)
-FOOT_GEOM_NAMES = ("FL", "FR", "RL", "RR")
+# 名称来自 configs/robot_config.py，换机器人时不需要改本文件。
+JOINT_NAMES = GO2_ROBOT.joint_names
+FOOT_GEOM_NAMES = GO2_ROBOT.foot_geom_names
 ACTION_DIM = len(JOINT_NAMES)
 LAST_ACTION_DIM = ACTION_DIM
 BASE_LINEAR_VELOCITY_DIM = 3
@@ -154,7 +153,7 @@ FOOT_CONTACT_DIM = len(FOOT_GEOM_NAMES)
 # Teacher-Student 融合模式的 PPO 残差缩放，单位 rad/动作单位。动作范围
 # [-1, 1]，因此学生最多修正教师关节目标 ±0.10 rad（约 ±5.7°）。该值过大
 # 会破坏 FSM 的稳定接触序列，过小则学生无法补偿 IK 裁剪和地形误差。
-FSM_RESIDUAL_SCALE = 0.10
+FSM_RESIDUAL_SCALE = GO2_ROBOT.fsm.residual_scale
 
 # 12 维动作表示 Trot 先验附近的无量纲残差。共享配置集中在 gait_config.py，
 # 便于单独调参而不改 Gym 生命周期。
@@ -194,13 +193,13 @@ except ImportError:
 
 # PD 增益沿用平地站立基线。kp 过小会重力塌腿，过大易接触振荡；kd 过小会
 # 落地抖动，过大则关节响应迟滞。单位分别为 N·m/rad 和 N·m·s/rad。
-KP = 60.0
-KD = 2.0
+KP = GO2_ROBOT.kp
+KD = GO2_ROBOT.kd
 
 # 控制周期 0.02 s（50 Hz）。若连续 20 个控制步（0.4 s）机身世界 X 坐标
 # 相对当前死区锚点净移动不足 0.02 m，就直接截断回合并要求策略重来，防止
 # “原地交替踏步”靠存活奖励长期刷分。只要净位移达到阈值，锚点就前移。
-CONTROL_FREQUENCY_HZ = 50.0
+CONTROL_FREQUENCY_HZ = GO2_ROBOT.fsm.control_hz
 MAX_EPISODE_STEPS = 1000
 DEAD_ZONE_WINDOW_STEPS = 20
 DEAD_ZONE_MIN_X_DISPLACEMENT_M = 0.02
@@ -215,8 +214,8 @@ try:
     from .terrain_task import STEP_STUCK_STEPS, TerrainTaskMixin
 except ImportError:
     from terrain_task import STEP_STUCK_STEPS, TerrainTaskMixin  # type: ignore[no-redef]
-BASE_FALL_HEIGHT_M = 0.16
-BASE_FALL_TILT_RAD = math.radians(60.0)
+BASE_FALL_HEIGHT_M = GO2_ROBOT.fall_height_m
+BASE_FALL_TILT_RAD = GO2_ROBOT.fall_tilt_rad
 
 def _load_model(scene_path: Path) -> mujoco.MjModel:
     """编译指定 XML，并在加载期间临时切换到场景目录。
@@ -374,9 +373,19 @@ class Go2Env(GaitMixin, TerrainTaskMixin, gym.Env):
         self.episode_steps = 0
         self._has_reset = False
 
-        if (self.model.nq, self.model.nv, self.model.nu) != (19, 18, 12):
+        if (
+            self.model.nq,
+            self.model.nv,
+            self.model.nu,
+        ) != (
+            GO2_ROBOT.expected_nq,
+            GO2_ROBOT.expected_nv,
+            GO2_ROBOT.expected_nu,
+        ):
             raise ValueError(
-                "Go2 模型维度应为 nq/nv/nu=19/18/12，"
+                "Go2 模型维度应为 nq/nv/nu="
+                f"{GO2_ROBOT.expected_nq}/{GO2_ROBOT.expected_nv}/"
+                f"{GO2_ROBOT.expected_nu}，"
                 f"实际 {self.model.nq}/{self.model.nv}/{self.model.nu}"
             )
 
@@ -407,10 +416,12 @@ class Go2Env(GaitMixin, TerrainTaskMixin, gym.Env):
             raise ValueError("12 个电机顺序与 JOINT_NAMES 不一致")
 
         self.base_body_id = mujoco.mj_name2id(
-            self.model, mujoco.mjtObj.mjOBJ_BODY, "base"
+            self.model, mujoco.mjtObj.mjOBJ_BODY, GO2_ROBOT.base_body_name
         )
         if self.base_body_id < 0:
-            raise ValueError("场景缺少名为 base 的 Go2 机身")
+            raise ValueError(
+                f"场景缺少名为 {GO2_ROBOT.base_body_name} 的 Go2 机身"
+            )
 
         self.foot_geom_ids = np.array(
             [
@@ -528,18 +539,16 @@ class Go2Env(GaitMixin, TerrainTaskMixin, gym.Env):
         if self.controller_mode == "fsm_residual":
             if self.terrain != TERRAIN_SINGLE_STEP:
                 raise ValueError("fsm_residual 当前只支持 single_step 地形")
-            from fsm_stairs_controller import (
-                GRAVITY_FEEDFORWARD_SCALE,
-                PD_KD,
-                PD_KP,
-                RuleFsmController,
-            )
+            from fsm_stairs_controller import RuleFsmController
 
-            # Teacher 和混合控制器必须复用同一组 PD/重力前馈参数，否则同一
-            # 教师目标在两套增益下会产生不同的接触力，无法比较纯 FSM 与融合效果。
-            self.fsm_pd_kp = np.asarray(PD_KP, dtype=np.float64).copy()
-            self.fsm_pd_kd = np.asarray(PD_KD, dtype=np.float64).copy()
-            self.fsm_gravity_feedforward_scale = float(GRAVITY_FEEDFORWARD_SCALE)
+            # Teacher 与混合控制器必须复用同一组 PD/重力前馈参数，否则同一
+            # 教师目标在两套增益下会产生不同接触力，无法比较纯 FSM 与融合效果。
+            # 数值来源：configs/robot_config.py（fsm 段），与规则教师同源。
+            self.fsm_pd_kp = np.asarray(GO2_ROBOT.fsm.pd_kp, dtype=np.float64)
+            self.fsm_pd_kd = np.asarray(GO2_ROBOT.fsm.pd_kd, dtype=np.float64)
+            self.fsm_gravity_feedforward_scale = float(
+                GO2_ROBOT.fsm.gravity_feedforward_scale
+            )
             self.fsm_controller = RuleFsmController(
                 self.model,
                 keyframe_id=self.keyframe_id,
