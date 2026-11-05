@@ -86,6 +86,7 @@ cd D:\桌面\机器狗; D:\Python313\python.exe .\reinforcement_learning\eval_fs
 - `docs/ARCHITECTURE_PLAN.md`：Teacher-Student 架构与后续路线。
 - `docs/RL_EXPERIMENT_LOG.md`：强化学习尝试、失败模式与调参记录。
 - `docs/FSM_STAGE_REPORT.md`：FSM 阶段进展、短测结果和已知限制。
+- `docs/GO2_LIMIT_REPORT.md`：0.195 m / 0.18 m 钢梯的物理极限测试与死局因素分析。
 
 ## 已知限制
 
