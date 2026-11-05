@@ -1,0 +1,38 @@
+{
+  "Go2": {
+    "support_depth_m": 0.136,
+    "com_margin_m": 0.046900000000000004,
+    "required_reach_f3_m": 0.28659108499742275,
+    "reach_ratio_f3": 0.6727490258155464,
+    "body_clearance_m": 0.03739999999999999,
+    "head_clearance_m": -0.0126,
+    "diagonal_rear_drop_m": 0.443,
+    "diagonal_rear_reach_m": 0.46770610430055326,
+    "diagonal_ratio": 1.0979016532876837,
+    "diagonal_level_possible": false
+  },
+  "Unitree B2": {
+    "support_depth_m": 0.11599999999999999,
+    "com_margin_m": 0.036699999999999997,
+    "required_reach_f3_m": 0.5405499514383477,
+    "reach_ratio_f3": 0.7722142163404968,
+    "body_clearance_m": 0.23969999999999997,
+    "head_clearance_m": 0.24469999999999997,
+    "diagonal_rear_drop_m": 0.6533,
+    "diagonal_rear_reach_m": 0.670299104877815,
+    "diagonal_ratio": 0.95757014982545,
+    "diagonal_level_possible": true
+  },
+  "GENISOM M1（估计）": {
+    "support_depth_m": 0.10999999999999999,
+    "com_margin_m": 0.03499999999999999,
+    "required_reach_f3_m": 0.3966106403010389,
+    "reach_ratio_f3": 0.9013878188659974,
+    "body_clearance_m": 0.06969999999999998,
+    "head_clearance_m": 0.0797,
+    "diagonal_rear_drop_m": 0.5153000000000001,
+    "diagonal_rear_reach_m": 0.5366880751423494,
+    "diagonal_ratio": 1.2197456253235213,
+    "diagonal_level_possible": false
+  }
+}

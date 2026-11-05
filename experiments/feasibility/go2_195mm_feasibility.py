@@ -502,6 +502,12 @@ def main() -> int:
     say()
 
     up1, up2 = up_steps[0], up_steps[1]
+    # 采样区间必须覆盖“脚踩在目标踏面上时的真实机身高度”，否则会把正确姿态
+    # 拒在网格之外。机身高度 ≈ 足端球心高度 + 站立垂距(0.2577 m)。
+    stance_h = 0.2577
+    f3_base_z = (up1["top_z"] + FOOT_R + stance_h - 0.12, up1["top_z"] + FOOT_R + stance_h + 0.08)
+    f2_base_z = (up2["top_z"] + FOOT_R + stance_h - 0.12, up2["top_z"] + FOOT_R + stance_h + 0.08)
+    f1_base_z = (0.24, up1["top_z"] + FOOT_R + stance_h + 0.06)
 
     family_f1 = _evaluate_family(
         rig,
@@ -510,7 +516,7 @@ def main() -> int:
         front_x_range=(up1["x_min"] + 0.05, up1["x_max"] - 0.03),
         rear_x_range=(-0.10, 0.10),
         base_x_range=(up1["x_min"] - 0.02, up1["x_max"] - 0.02),
-        base_z_range=(0.26, 0.40),
+        base_z_range=f1_base_z,
         pitch_range_deg=(-6.0, 6.0),
         label="F1 前足搭第1级、后足在地面（跨步瞬间）",
     )
@@ -521,8 +527,10 @@ def main() -> int:
         front_x_range=(up2["x_min"] + 0.05, up2["x_max"] - 0.04),
         rear_x_range=(up1["x_min"] + 0.04, up1["x_max"] - 0.05),
         base_x_range=(up1["x_max"] - 0.04, up2["x_max"] - 0.06),
-        base_z_range=(0.30, 0.46),
-        pitch_range_deg=(-6.0, 6.0),
+        base_z_range=f2_base_z,
+        # 对角姿态必须允许抬机头：机头下方球体碰撞体会撞上一级踏板，
+        # 只有俯仰 -14°~-30°（低头为正）才能同时满足净空与后腿伸展。
+        pitch_range_deg=(-30.0, 6.0),
         label="F2 前足在第2级、后足在第1级（真实爬梯的对角姿态）",
     )
     family_f3 = _evaluate_family(
@@ -532,7 +540,7 @@ def main() -> int:
         front_x_range=(up1["x_min"] + 0.05, up1["x_max"] - 0.03),
         rear_x_range=(up1["x_min"] + 0.03, up1["x_max"] - 0.05),
         base_x_range=(up1["x_min"] + 0.02, up1["x_max"] + 0.01),
-        base_z_range=(0.28, 0.42),
+        base_z_range=f3_base_z,
         pitch_range_deg=(-6.0, 6.0),
         label="F3 四足都在第1级踏板（环境成功判定所要求的姿态）",
     )
