@@ -158,7 +158,7 @@ class GaitMixin:
             只读取 ``trot_time_s``，不推进时间、不修改物理状态。训练和回放
             必须保持同一时间基准，否则观测中的相位会和先验动作错位。
 
-        重要性等级：A（150 维观测的最后两维，决定策略能否踩准 Trot 节拍）。
+        重要性等级：A（175 维观测的第 148～149 维，决定策略能否踩准 Trot 节拍）。
         """
         gait_time_s = max(self.trot_time_s - TROT_WARMUP_TIME_S, 0.0)
         phase_rad = 2.0 * math.pi * TROT_FREQUENCY_HZ * gait_time_s
@@ -184,8 +184,10 @@ class GaitMixin:
             ``STAND_JOINT_RAD``，并与开环基线时序一致。
 
         关键参数：
-            ``TROT_FREQUENCY_HZ=1.7`` 对应 1.7 个步态周期/秒；调高会增加
+            ``TROT_FREQUENCY_HZ=2.0`` 对应 2.0 个步态周期/秒；调高会增加
             单位时间步数但更容易失稳，调低则步幅/推进能力不足。
+            注意：规则 FSM 教师内部的 FLAT_TROT 另用 1.8 Hz，两者不是同一
+            时钟，比较节拍时必须先确认调用方。
             ``TROT_SWING_HEIGHT_M=0.045`` 是设计抬脚高度，不是实测足底高度。
             ``TROT_SWING_KNEE_GAIN_RAD_PER_M`` 把目标抬脚高度转为膝关节屈曲。
 

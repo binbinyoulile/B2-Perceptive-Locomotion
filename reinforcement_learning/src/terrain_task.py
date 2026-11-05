@@ -61,6 +61,130 @@ except ImportError:
 STEP_STUCK_STEPS = 100
 TERRAIN_SINGLE_STEP = "single_step"
 
+# 稳定站立高度基准的采样时刻，单位 s。出生关键帧是“悬空姿态”（足底离地
+# 约 11.6 mm），落地承重后机身会比 qpos 关键帧低约 3.3 cm。如果直接用
+# 关键帧高度做“是否升到台面”的比较基准，阈值会比真实站姿还高，导致
+# 即使四足稳稳站在台上也判不成功。这里在站立预热期（Trot 尚未起振）
+# 采一次实测高度作为基准。要求调用方在 reset 后确实先平地上站一会儿
+# （Gym 环境固定 0.45 m 助跑，满足该前提）。
+SETTLED_HEIGHT_CAPTURE_TIME_S = 0.40
+
+# 登顶判定口径（B1）：允许四足在不同控制帧接触台面，但必须同时满足
+#   1) 每只脚最近 FOOT_TOP_RECENT_WINDOW_STEPS 个控制步内真实踩过顶面；
+#   2) 机身高度达到“出生高度 + 台阶高度 - 容差”；
+#   3) 上述条件连续保持 SUCCESS_DWELL_STEPS 个控制步。
+# 为什么需要 B1：Trot/准静态步态中四足很少在同一帧同时受压（评测日志
+# 20/20 回合都是两足对角支撑），单帧“四足同时接触”会把真实登顶判成失败。
+# 30 步 = 0.6 s ≈ 1.2 个 2 Hz Trot 周期，比一次摆动相（约 0.4 周期）长，
+# 因此它不等于“允许腾空跳过台面”：每只脚都必须在最近一个步态周期内真正
+# 落在顶面上，且机身已经达到台面高度。
+SUCCESS_DWELL_STEPS = 5
+FOOT_TOP_RECENT_WINDOW_STEPS = 30
+
+
+class PlatformDwellTracker:
+    """统计“四足是否已经稳定站在台面上”的驻留计时器。
+
+    文件目的：
+        把 B1 登顶判定口径做成与具体传感器来源无关的纯状态机，供 Gym 环境
+        （足端—台阶接触）和规则 FSM（LiDAR 几何判定）共用，避免两套成功
+        标准漂移。
+    整体输入：
+        每个控制步的四足“当前是否在台面”布尔掩码，以及机身高度是否达标。
+    整体输出：
+        ``settled``（连续驻留达标即为 True）与 ``dwell_steps``。
+    依赖与版本要求：
+        Python 3.10+、NumPy 2.x；不依赖 MuJoCo，可在纯运动学脚本中复用。
+    运行方式：
+        每个 50 Hz 控制步调用一次 ``update()``；``reset()`` 在回合开始时调用。
+    关键假设：
+        两次调用之间恰好间隔一个控制步；掩码顺序为 FL/FR/RL/RR。
+    已知限制：
+        “最近 N 步内踩过”允许某只脚在驻留窗口内短暂腾空，这是为 Trot 步态
+        设计的；如果将来加入跳跃或奔跑步态，需要重新评估窗口长度。
+    重要性等级：A（登顶成功判定与 300 分奖励共用该状态）。
+    """
+
+    def __init__(
+        self,
+        foot_count: int = 4,
+        dwell_steps: int = SUCCESS_DWELL_STEPS,
+        recent_window_steps: int = FOOT_TOP_RECENT_WINDOW_STEPS,
+    ) -> None:
+        """初始化计时器。
+
+        参数：
+            foot_count：足端数量，必须为正整数，默认 4（FL/FR/RL/RR）。
+            dwell_steps：连续满足条件多少个控制步算成功，必须为正整数。
+            recent_window_steps：单脚“最近一次踩顶”的有效窗口，单位控制步。
+                设得太短会在 Trot 腾空相频繁清零，设得太长会把很久以前的
+                接触当成当前接触。
+        异常：
+            任一参数非法时抛出 ValueError。
+        重要性等级：A。
+        """
+        if int(foot_count) <= 0:
+            raise ValueError(f"foot_count 必须为正整数，实际 {foot_count!r}")
+        if int(dwell_steps) <= 0:
+            raise ValueError(f"dwell_steps 必须为正整数，实际 {dwell_steps!r}")
+        if int(recent_window_steps) < 0:
+            raise ValueError(
+                f"recent_window_steps 必须为非负整数，实际 {recent_window_steps!r}"
+            )
+        self.foot_count = int(foot_count)
+        self.dwell_steps_needed = int(dwell_steps)
+        self.recent_window_steps = int(recent_window_steps)
+        self._steps_since_top = np.full(
+            self.foot_count, self.recent_window_steps + 1, dtype=np.int32
+        )
+        self.dwell_steps = 0
+        self.settled = False
+
+    def reset(self) -> None:
+        """清空驻留状态，供每个 episode 的 reset 调用。重要性等级：A。"""
+        self._steps_since_top.fill(self.recent_window_steps + 1)
+        self.dwell_steps = 0
+        self.settled = False
+
+    @property
+    def steps_since_top(self) -> np.ndarray:
+        """返回每只脚距最近一次踩顶的控制步数（独立副本），用于诊断。"""
+        return self._steps_since_top.copy()
+
+    def update(self, feet_on_top: np.ndarray, *, base_height_ok: bool) -> bool:
+        """推进一个控制步并返回是否已经稳定站在台面上。
+
+        参数：
+            feet_on_top：shape=(foot_count,)，布尔序列；元素为 True 表示该脚
+                在当前帧确实踩在台阶顶面。
+            base_height_ok：机身高度是否已达到台面高度要求。
+        返回：
+            bool，``True`` 表示连续驻留步数已达到 ``dwell_steps_needed``；
+            该结果在同一回合内一旦为 True 就保持为 True（与终止判定语义一致）。
+        异常：
+            ``feet_on_top`` 形状不符时抛出 ValueError。
+        副作用：
+            更新每只脚的“距上次踩顶步数”和 ``dwell_steps``。
+        重要性等级：A。
+        """
+        feet = np.asarray(feet_on_top, dtype=bool).reshape(-1)
+        if feet.shape != (self.foot_count,):
+            raise ValueError(
+                f"feet_on_top shape 应为 ({self.foot_count},)，实际 {feet.shape}"
+            )
+        aged = np.minimum(
+            self._steps_since_top + 1, self.recent_window_steps + 1
+        ).astype(np.int32)
+        self._steps_since_top = np.where(feet, 0, aged).astype(np.int32)
+        all_feet_recent = bool(
+            np.all(self._steps_since_top <= self.recent_window_steps)
+        )
+        on_platform = bool(base_height_ok) and all_feet_recent
+        self.dwell_steps = self.dwell_steps + 1 if on_platform else 0
+        if self.dwell_steps >= self.dwell_steps_needed:
+            self.settled = True
+        return self.settled
+
 
 def _tilt_rad(quaternion_wxyz: np.ndarray) -> float:
     """计算机身局部 +Z 轴与世界 +Z 轴的夹角，单位 rad。"""
@@ -155,6 +279,11 @@ class TerrainTaskMixin:
         """
         self.step_crossed = False
         self.step_stuck_steps = 0
+        # 本回合实测的平地稳定站立高度，单位 m；None 表示尚未采样。
+        self.settled_flat_base_z_m: float | None = None
+        # B1 登顶计时器：环境（接触来源）与规则 FSM（LiDAR 几何来源）共用
+        # 同一个纯状态机，保证“成功”只有一种口径。
+        self.platform_dwell = PlatformDwellTracker()
         self.hanging_steps = 0
         self.hanging_triggered = False
         self.hanging_front_memory_steps = 0
@@ -358,6 +487,9 @@ class TerrainTaskMixin:
             "stuck_at_step": False,
             "step_base_crossing_reward": 0.0,
             "currently_on_platform": False,
+            "success": False,
+            "platform_dwell_steps": 0,
+            "platform_foot_age_steps": (0, 0, 0, 0),
             "hanging_steps": 0,
             "hanging_front_memory_steps": 0,
             "hanging_triggered": False,
@@ -398,17 +530,37 @@ class TerrainTaskMixin:
             self.last_step_front_feet_reward = STEP_FRONT_FEET_REWARD
             self.front_feet_rewarded = True
 
+        # 采样本回合的平地稳定站立高度。出生关键帧是悬空姿态，落地承重后
+        # 机身会低约 3.3 cm；用它做“是否升到台面”的基准会让阈值高于真实
+        # 站姿，使正确登顶也判失败（实测余量仅 0.27 mm）。
+        if (
+            self.settled_flat_base_z_m is None
+            and float(self.data.time) >= SETTLED_HEIGHT_CAPTURE_TIME_S
+        ):
+            self.settled_flat_base_z_m = base_z_m
+        reference_base_z_m = (
+            self.settled_flat_base_z_m
+            if self.settled_flat_base_z_m is not None
+            else float(self.initial_base_z_m)
+        )
         platform_z_threshold_m = (
-            float(self.initial_base_z_m)
+            float(reference_base_z_m)
             + float(self.applied_step_height_m)
             - HANGING_BASE_Z_TOLERANCE_M
         )
         base_height_reached_platform = base_z_m >= platform_z_threshold_m
+        # 严格口径仅保留为诊断字段：当前帧四足同时受顶面支撑。
         currently_on_platform = bool(
             np.all(foot_support) and base_height_reached_platform
         )
+        # B1 口径：每只脚最近一个步态周期内都踩过顶面 + 机身高度达标，
+        # 连续保持 SUCCESS_DWELL_STEPS 步才算登顶成功。
+        self.platform_dwell.update(
+            foot_support, base_height_ok=base_height_reached_platform
+        )
+        success_settled = bool(self.platform_dwell.settled)
         self.last_step_all_feet_reward = 0.0
-        if currently_on_platform and not self.all_feet_rewarded:
+        if success_settled and not self.all_feet_rewarded:
             self.last_step_all_feet_reward = STEP_ALL_FEET_REWARD
             self.all_feet_rewarded = True
 
@@ -463,6 +615,11 @@ class TerrainTaskMixin:
             "stuck_at_step": self.step_stuck_steps >= STEP_STUCK_STEPS,
             "step_base_crossing_reward": 0.0,
             "currently_on_platform": currently_on_platform,
+            "success": success_settled,
+            "platform_dwell_steps": int(self.platform_dwell.dwell_steps),
+            "platform_foot_age_steps": tuple(
+                int(value) for value in self.platform_dwell.steps_since_top
+            ),
             "hanging_steps": self.hanging_steps,
             "hanging_front_memory_steps": self.hanging_front_memory_steps,
             "hanging_triggered": self.hanging_triggered,

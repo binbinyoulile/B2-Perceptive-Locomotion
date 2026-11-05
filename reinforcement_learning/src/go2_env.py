@@ -28,8 +28,12 @@
     1. Go2 自由基座名为 ``base``，机身局部 +X 为前进方向。
     2. 12 个电机顺序与 ``JOINT_NAMES`` 一致，按名称校验执行器映射。
     3. 控制频率为 50 Hz，每个控制步包含 10 个 0.002 s 物理步。
-    4. Trot 先验频率为 1.7 Hz，FL+RR 与 FR+RL 相差半个周期；先验在
+    4. Trot 先验频率为 2.0 Hz（唯一来源是 gait_config.TROT_FREQUENCY_HZ；
+       历史注释中的 1.7 Hz 已废弃），FL+RR 与 FR+RL 相差半个周期；先验在
        ``TROT_RAMP_TIME_S`` 内平滑起振，避免 reset 后瞬间踢腿。
+       注意：规则 FSM 教师自己的 FLAT_TROT 内部仍按 1.8 Hz 生成（
+       fsm_stairs_controller._flat_trot_joint_targets），两者不是同一时钟，
+       排查步态节拍问题时必须区分。
     5. 足端 geom 名称为 FL/FR/RL/RR；足底高度为球心 Z 减足端球半径。
     6. LiDAR 高度图 shape=(10,10)，展平后占观测第 48～147 维；第 148～149
        维为 Trot 相位，第 150～161 维为四足局部坐标，第 162 维为最近台阶距离，第 163～174 维为 12 个关节到物理限位的距离。
@@ -782,8 +786,12 @@ class Go2Env(GaitMixin, TerrainTaskMixin, gym.Env):
 
         参数：
             action：shape=(12,)，Trot 残差动作，范围 [-1, 1]，超出值会裁剪。
-                实际 PD 目标为 ``trot_prior_rad + 0.08 * action``；动作 0
-                表示完全跟随当前 Trot 先验，不再表示绝对站立姿。
+                实际 PD 目标按模式不同：
+                ``trot`` 模式为 ``trot_prior_rad + 0.08 * action``（
+                gait_config.TROT_RESIDUAL_SCALE）；
+                ``fsm_residual`` 模式为 ``teacher_target_rad + 0.10 * action``
+                （go2_env.FSM_RESIDUAL_SCALE）。动作 0 表示完全跟随当前先验/教师，
+                不再表示绝对站立姿。
         返回：
             ``(observation, reward, terminated, truncated, info)``。
             terminated=True 表示当前帧四足均支撑在台面且机身 Z 达标
@@ -1057,9 +1065,11 @@ class Go2Env(GaitMixin, TerrainTaskMixin, gym.Env):
         dead_zone_triggered = self.dead_zone_steps >= DEAD_ZONE_WINDOW_STEPS
         height_m = float(self.data.qpos[2])
         tilt_rad = _tilt_rad(np.asarray(self.data.qpos[3:7], dtype=np.float64))
-        # 成功必须由当前帧物理状态直接证明：四足均实际支撑在台面，且机身 Z
-        # 已达到台面高度。History/step_crossed 只保留诊断，不参与 success。
-        success = bool(terrain_progress["currently_on_platform"])
+        # 成功必须由当前帧物理状态直接证明：每只脚最近一个步态周期内都真实
+        # 支撑在台面，且连续 SUCCESS_DWELL_STEPS 步保持台面高度（B1 口径，
+        # 见 terrain_task.PlatformDwellTracker）。History/step_crossed 只保留
+        # 诊断，不参与 success。
+        success = bool(terrain_progress["success"])
         fallen = (
             height_m < BASE_FALL_HEIGHT_M
             or tilt_rad > BASE_FALL_TILT_RAD
@@ -1167,7 +1177,17 @@ class Go2Env(GaitMixin, TerrainTaskMixin, gym.Env):
             "domain_randomization": self.domain_randomization,
             "heightmap_noise_std_m": self.heightmap_noise_std_m,
             "step_crossed": self.step_crossed,
-            "currently_on_platform": success,
+            "currently_on_platform": bool(
+                terrain_progress["currently_on_platform"]
+            ),
+            "success": success,
+            "platform_dwell_steps": int(
+                terrain_progress["platform_dwell_steps"]
+            ),
+            "platform_foot_age_steps": tuple(
+                int(value)
+                for value in terrain_progress["platform_foot_age_steps"]
+            ),
             "nearest_step_distance_m": get_nearest_step_distance(self),
             "foot_local_positions_m": tuple(
                 float(value) for value in get_foot_local_positions(self)

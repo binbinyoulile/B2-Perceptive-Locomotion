@@ -62,9 +62,13 @@ TRIPOD_SUPPORT_PENALTY_PER_STEP = 0.0
 ALIVE_BONUS_WEIGHT = 0.1
 FALL_TERMINATION_PENALTY = 100.0
 
-# 单级台阶的当前帧奖励契约：前足搭台 0.5、后足落台 3.0、四足当前登顶 15.0。
+# 单级台阶的当前帧奖励契约：前足搭台 0.5、后足落台 3.0、四足登顶 300.0。
+# 登顶奖励必须显著大于“接近段密集奖励总和 + 一次摔倒代价”，否则最优策略
+# 会变成“尽快冲到台阶前并摔倒”：实测接近段每控制步约 +0.66，100/(0.66)≈150
+# 步即可把摔倒的 100 分罚分赚回来，而登顶原来只值 15 分（约 23 步行走分）。
+# 300 分约等于 450 步密集奖励，使“真登顶”严格优于“冲到台阶前摔倒”。
 STEP_FRONT_FEET_REWARD = 0.5
-STEP_ALL_FEET_REWARD = 15.0
+STEP_ALL_FEET_REWARD = 300.0
 STEP_STABLE_REWARD_PER_STEP = 0.0
 STEP_STABLE_SPEED_MPS = 0.10
 STEP_EDGE_TILT_THRESHOLD_RAD = math.radians(35.0)

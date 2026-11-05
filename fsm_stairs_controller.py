@@ -50,6 +50,9 @@ from terrain_perception import (  # noqa: E402
     TerrainPerception,
     TerrainScan,
 )
+# 与 Gym 环境共用同一个 B1 登顶判定状态机（四足不同帧接触 + 连续驻留），
+# 保证“规则教师说 DONE”和“环境说 success”不会出现两套标准。
+from terrain_task import PlatformDwellTracker  # noqa: E402
 
 
 SCENE_DIR = ROOT_DIR / "simulations" / "mujoco" / "go2_stairs_static"
@@ -741,6 +744,9 @@ class RuleFsmController:
         self.metrics = RuntimeMetrics()
         self._last_valid_step_time_s = -1e9
         self._edge_world_x_m: float | None = None
+        # B1 登顶计时器（与 Gym 环境共用同一个类）：FEET 在台面 + 重心越线，
+        # 连续驻留达标才允许进入 DONE，取代原来的“单帧四足同时踩台”判据。
+        self._platform_dwell = PlatformDwellTracker()
         self._feature_streak = 0
         self._feature_visible_now = False
         self._gait_rebased = False
@@ -839,6 +845,7 @@ class RuleFsmController:
         self.last_scan = None
         self._last_valid_step_time_s = -1e9
         self._edge_world_x_m = None
+        self._platform_dwell.reset()
         self._feature_streak = 0
         self._feature_visible_now = False
         self._gait_rebased = False
@@ -3088,6 +3095,9 @@ class RuleFsmController:
         """
 
         gait_time_s = max(0.0, float(data.time) - self._gait_start_s)
+        # 注意：教师自己的平地节拍固定为 1.8 Hz，与 gait_config 的 2.0 Hz
+        # （策略侧 Trot 先验）不是同一时钟。改这里会改变教师实测行为，进而
+        # 使已完成的 5 万步评测结果失去可比性，必须先重跑 20 种子对照。
         leg_phase = 2.0 * math.pi * (
             1.8 * gait_time_s
             + np.array((0.0, 0.5, 0.5, 0.0), dtype=np.float64)
@@ -3320,6 +3330,14 @@ class RuleFsmController:
         all_on_step = bool(np.all(feet_on_step))
         self._front_on_step = front_on_step
         self._rear_on_step = rear_on_step
+        # 与 Gym 环境共用 B1 判定：四足允许不同帧踩台，但每只脚必须在最近
+        # 一个步态周期内踩过顶面，并且机身重心已越前缘、连续驻留达标。
+        base_on_top_for_dwell = bool(
+            edge_x is not None and float(base[0]) > float(edge_x) + 0.035
+        )
+        self._platform_dwell.update(
+            feet_on_step, base_height_ok=base_on_top_for_dwell
+        )
 
         pitch, roll = quaternion_to_pitch_roll(data.qpos[3:7])
         if (
@@ -3379,16 +3397,12 @@ class RuleFsmController:
                     FsmState.CLIMB_PUSH, data, gait_delay_s=0.0
                 )
         elif self.state == FsmState.CLIMB_PUSH:
-            # 前压计划完成后再做一次严格空间验收：四足都在台面内且重心
-            # 越过前缘才可进入 DONE；任何一项不满足都保持当前状态，不通过
-            # 计时器或单帧高度猜测伪造成功。
+            # 前压计划完成后再做空间验收：使用与环境完全相同的 B1 判定
+            # （四足最近一个步态周期内都踩过顶面 + 重心越线 + 连续驻留），
+            # 不通过计时器或单帧高度猜测伪造成功。
             if self._quasi_plan_done:
                 self._pushed_once = True
-                if (
-                    all_on_step
-                    and edge_x is not None
-                    and base[0] > edge_x + 0.035
-                ):
+                if self._platform_dwell.settled:
                     self._transition_to(
                         FsmState.DONE, data, gait_delay_s=0.0
                     )
