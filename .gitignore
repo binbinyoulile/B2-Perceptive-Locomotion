@@ -11,10 +11,10 @@ env/
 .ruff_cache/
 
 # Training outputs
-experiments/runs/*
-!experiments/runs/.gitkeep
+experiments/runs/
 experiments/checkpoints/*
-!experiments/checkpoints/.gitkeep
+!experiments/checkpoints/ppo_fsm_residual_50k/
+!experiments/checkpoints/ppo_fsm_residual_50k/ppo_fsm_residual_50k_latest.zip
 
 # Large/generated media
 *.mp4
@@ -24,6 +24,9 @@ experiments/checkpoints/*
 *.log
 tensorboard/
 wandb/
+
+# 本机记忆库（meow-memory 工作区数据，不属于项目源码，也不应跨机器传播）
+.dsh-meow/
 
 # OS/editor
 .DS_Store

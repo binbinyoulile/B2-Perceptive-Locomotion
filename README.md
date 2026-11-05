@@ -1,85 +1,95 @@
-# Unitree Go2 楼梯强化学习项目
+# Unitree Go2 楼梯运动项目
 
-基于 MuJoCo 的 Unitree Go2 四足机器人楼梯运动研究项目。最终目标是让机器狗在仿真中稳定完成连续上行、平台通过和下行，再逐步迁移到真实 Go2。
+> 当前状态（2026-10-30）：保留 MuJoCo 完整钢梯场景、0.04 m 单级台阶、带机头 LiDAR 的 Go2 模型、规则 FSM Teacher，以及最终 5 万步 FSM + PPO 残差模型。当前模型尚未实现四足稳定登顶，不能宣称已通过 0.195 m 高台阶或完整三层钢梯。
 
-当前属于**阶段 0：可重复实时仿真基线**。场景中只有官方 Go2 和完整钢梯；一键入口会依次完成：
+## 项目简介
 
-```text
-稳定站立 -> 平地 Trot 接近钢梯 -> 楼梯前停稳站立
-```
+本项目研究 Unitree Go2 四足机器人在 MuJoCo 中的楼梯运动与分层控制。主线路为 **规则 FSM Teacher + PPO 有界残差 Student**：FSM 生成可解释的基础动作，PPO 只输出小幅关节修正。当前仓库已完成阶段 0/1 的实时展示、感知环境和低台阶短测，后续重点是解决后腿跟随、支撑足锚点与重心转移问题。
 
-窗口和物理仿真会继续运行，不重播、不重置、不自动关闭。当前**尚未实现上楼梯**。
+## 一键运行
 
-![Go2 与完整钢梯](simulations/mujoco/go2_stairs_static/preview.png)
-
-## 一键实时运行
+在 PowerShell 中运行完整钢梯 + Go2 实时演示：
 
 ```powershell
 cd D:\桌面\机器狗; D:\Python313\python.exe .\run_demo.py
 ```
 
-环境依赖记录在 `requirements-static.txt`。当前机器直接使用全局 Python，不需要创建或激活虚拟环境。关闭 3D 窗口或按 `Ctrl+C` 结束。
-
-无窗口回归验证：
+运行 0.04 m 低台阶 FSM 实时演示：
 
 ```powershell
-cd D:\桌面\机器狗; D:\Python313\python.exe .\run_demo.py --headless --duration 11
+cd D:\桌面\机器狗; D:\Python313\python.exe .\fsm_stairs_controller.py --scene low
 ```
 
-## 当前已完成
+加载最终 50k PPO 残差模型进行 3D 回放：
 
-- 官方 Unitree Go2 MJCF，`nq/nv/nu = 19/18/12`。
-- 完整钢梯 STL 视觉模型，STL 不参与碰撞。
-- 49 个分类 box 碰撞体：7 个薄落脚面、支撑柱、侧梁、横撑和栏杆。
-- 平地 PD 站立基线、开环 Trot 基线、0.08 m 单级台阶课程场景。
-- 单进程实时 3D 演示；运动结束后机器狗在楼梯前持续站立。
-- 环境检查、楼梯几何提取、碰撞与初始接触回归脚本。
+```powershell
+cd D:\桌面\机器狗; D:\Python313\python.exe .\reinforcement_learning\eval_fsm_residual.py --model .\experiments\checkpoints\ppo_fsm_residual_50k\ppo_fsm_residual_50k_latest.zip
+```
 
-## 目录
+运行时不要求创建或激活虚拟环境；关闭 MuJoCo 窗口或按 `Ctrl+C` 结束。
+
+## 当前能力
+
+- 官方 Unitree Go2 MJCF 与完整钢梯可视化/碰撞资产。
+- 带机头前向 `lidar_site` 的派生 Go2 模型，不修改官方模型。
+- 完整三层钢梯场景及对应 LiDAR 场景。
+- 0.04 m 单级低台阶课程场景。
+- FSM 状态：`FLAT_TROT -> HIGH_STEP -> CRAWL -> CLIMB_PUSH -> DONE/FAILED`。
+- 175 维策略观测，包含关节与机身状态、局部高度图和关节物理限位距离。
+- 最终 PPO 残差模型：`ppo_fsm_residual_50k_latest.zip`。
+
+## 5 万步短测结论
+
+| 方案 | 四足登顶率 | 平均前进距离 | IK 裁剪 | 动作饱和率 |
+|---|---:|---:|---:|---:|
+| 纯 FSM Teacher | 0/20 | +0.267 m | 257 次 | 0% |
+| FSM + 0.10 × PPO | 0/20 | +0.485 m | 0 次 | 0% |
+
+短测消除了 IK 裁剪和关节限位违规，但尚未解决四足登顶。完整对比见 `experiments/evaluations/fsm_residual_50k_compare.txt`，阶段结论见 `docs/FSM_STAGE_REPORT.md`。
+
+## 精简目录
 
 ```text
 机器狗/
-├─ run_demo.py                    唯一用户级实时仿真入口
-├─ models/
-│  ├─ unitree_go2/                唯一的官方 Go2 MJCF、OBJ 和许可证
-│  └─ stairs/                     原始钢梯 STL、几何 JSON 和来源说明
-├─ simulations/mujoco/
-│  ├─ go2_stairs_static/          完整钢梯场景、单级台阶场景和预览图
-│  └─ go2_stand_flat/             PD 站立、开环 Trot 控制基线
-├─ scripts/                       环境检查、几何提取和碰撞场景验证
-├─ reinforcement_learning/       后续 Gymnasium 环境、训练配置与测试
-├─ datasets/                      后续地形与轨迹数据
-├─ experiments/                   训练运行、检查点和评测报告
-└─ docs/                          路线图、环境、几何、决策与待确认事项
+├─ README.md
+├─ requirements-static.txt
+├─ run_demo.py
+├─ fsm_stairs_controller.py
+├─ docs/
+│  ├─ ARCHITECTURE_PLAN.md
+│  ├─ RL_EXPERIMENT_LOG.md
+│  └─ FSM_STAGE_REPORT.md
+├─ experiments/
+│  ├─ checkpoints/ppo_fsm_residual_50k/ppo_fsm_residual_50k_latest.zip
+│  └─ evaluations/fsm_residual_50k_compare.txt
+├─ models/                         官方 Go2、LiDAR 派生模型与钢梯资产
+├─ reinforcement_learning/
+│  ├─ eval_fsm_residual.py         最终模型 3D 回放入口
+│  └─ src/                         环境、奖励、观测、步态与地形感知源码
+└─ simulations/mujoco/go2_stairs_static/
+   ├─ scene.xml                    完整三层钢梯
+   ├─ scene_single_step_004.xml    0.04 m 单级低台阶
+   └─ scene_full_lidar.xml         完整钢梯 LiDAR 版本
 ```
 
-`schema` 说明：`models/` 保存不可随意修改的原始资产；`simulations/` 保存场景和控制实验；根目录 `run_demo.py` 只负责展示，不承担训练逻辑。
+`reinforcement_learning/eval_fsm_residual.py` 是核心运行入口之外的唯一必要展示文件；没有它，保留的最终权重无法直接加载到 3D 窗口。
 
-## 验证
+## 环境要求
 
-```powershell
-D:\Python313\python.exe .\scripts\check_environment.py
-D:\Python313\python.exe .\scripts\validate_collision_scenes.py
-D:\Python313\python.exe .\scripts\analyze_stairs_geometry.py
-```
+- Python 3.10+，当前 Windows 验证环境为 `D:\Python313\python.exe`。
+- MuJoCo 3.x、NumPy 2.x、Gymnasium、Stable-Baselines3、PyTorch。
+- 具备 OpenGL 的桌面图形环境，用于打开被动式 MuJoCo 3D 窗口。
+- 依赖版本记录见 `requirements-static.txt`。
 
-- `check_environment.py`：依赖、根模型资产、场景编译、关键帧和视觉碰撞开关。
-- `validate_collision_scenes.py`：49 个碰撞体、7 个落脚面、真实缝隙、平台净空、单级台阶短时接触。
-- `analyze_stairs_geometry.py`：从 STL 重建 `models/stairs/geometry_estimate.json`。
+## 核心文档
 
-## 后续强化学习路线
+- `docs/ARCHITECTURE_PLAN.md`：Teacher-Student 架构与后续路线。
+- `docs/RL_EXPERIMENT_LOG.md`：强化学习尝试、失败模式与调参记录。
+- `docs/FSM_STAGE_REPORT.md`：FSM 阶段进展、短测结果和已知限制。
 
-1. **Gymnasium 环境**：12 维关节动作，固定控制频率，建立随机动作和站立动作自检。
-2. **平地闭环**：速度跟踪、姿态稳定、动作平滑和多种子评测。
-3. **单级低台阶**：先 0.08 m，再提升到 0.12～0.15 m。
-4. **完整钢梯课程**：平地 → 小坡 → 单级 → 多级 → 缩放楼梯 → 上行 → 平台 → 下行。
-5. **域随机化**：摩擦、质量、质心、电机强度、控制延迟和传感器噪声。
-6. **统一评测与真机准备**：成功率、完成时间、跌倒率、足端滑移、能耗和关节跟踪误差。
+## 已知限制
 
-详细阶段、验收标准和风险见 [项目计划](docs/PROJECT_PLAN.md)，学习顺序见 [强化学习学习路线](docs/LEARNING_ROADMAP.md)。
-
-## 模型与来源
-
-- Go2 MJCF 原始说明与许可证：`models/unitree_go2/README.md`、`models/unitree_go2/LICENSE`（BSD-3-Clause）。
-- 钢梯 STL 为用户提供的原始几何，保存在 `models/stairs/steel_stair.STL`；派生尺寸和哈希见 `models/stairs/geometry_estimate.json`。
-- 不在场景目录重复保存 OBJ/STL。修改路径时只改 `simulations/mujoco/*/scene*.xml`，不要修改官方模型资产。
+- 0.04 m 低台阶尚未实现稳定的四足登顶。
+- 后腿跟随、支撑足锚点与机身姿态改变时的 IK 可达性仍是主要问题。
+- 0.195 m 高台阶和完整三层钢梯尚未完成跨越验证。
+- 当前没有真机标定、质量/摩擦域随机化或完整安全盾。

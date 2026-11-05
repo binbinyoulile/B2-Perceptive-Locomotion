@@ -12,16 +12,16 @@ r"""Go2 楼梯阶段 0 单文件实时演示：平地站立、Trot 接近钢梯�
 依赖与版本要求：
     Python 3.13、MuJoCo 3.16、NumPy 2.x、Windows 图形桌面及可用 OpenGL。
 运行方式：
-    D:\Python313\python.exe D:\桌面\机器狗\run_demo.py
+    python .\run_demo.py
     开发验证可追加 --headless --duration 11；不传参数时窗口在接近完成后保持打开。
 关键假设：
     1. 12 个关节与 actuator 的顺序沿用仓库中已验证的站立/Trot 基线。
     2. scene.xml 中包含 Go2 的 stairs_home 关键帧和同名钢梯场景。
-    3. Trot 是开环步态，机身辅助力和姿态反馈只用于让平地演示可重复。
+    3. 站立和 Trot 都只输出 12 个关节的 PD 力矩，不施加机身外力辅助。
     4. 机器狗在接触楼梯前停稳，演示结束后不重置、不评价上楼能力。
 已知限制：
-    开环 Trot 仍有轻微机身晃动；接近楼梯后会用站立目标缓冲停稳。
-    当前机身辅助不能直接迁移到真机，后续阶段需要独立的速度、姿态和落脚控制。
+    纯开环 Trot 没有姿态、速度和落脚反馈，可能逐渐跑偏或提前倾倒。
+    当前脚本用于展示和测量这一真实限制，不代表已经具备稳定上楼能力。
 重要性等级：A（当前阶段的唯一演示入口）。
 """
 
@@ -40,21 +40,8 @@ import mujoco.viewer
 import numpy as np
 
 ROOT = Path(__file__).resolve().parent
-GO2_STAND_DIR = ROOT / "simulations" / "mujoco" / "go2_stand_flat"
 SCENE_DIR = ROOT / "simulations" / "mujoco" / "go2_stairs_static"
 SCENE_PATH = SCENE_DIR / "scene.xml"
-
-# 复用已经验证过的站立角、PD 增益和 Trot 目标生成器，确保本入口与其他基线
-# 使用同一套关节顺序，避免复制多份关节约定后逐渐不一致。
-sys.path.insert(0, str(GO2_STAND_DIR))
-from stand_pd import (  # noqa: E402
-    KD,
-    KP,
-    LEG_NAMES,
-    Q_TARGET as Q_STAND,
-    quaternion_to_euler,
-)
-from trot_open_loop import generate_joint_targets  # noqa: E402
 
 # 一次性演示：先站立，再 Trot 接近钢梯，最后停稳并保持窗口，不再重播。
 STAND_DURATION_S = 1.5
@@ -63,30 +50,8 @@ TROT_PHASE_START_S = STAND_DURATION_S
 APPROACH_FINISH_TIME_S = STAND_DURATION_S + TROT_DURATION_S
 STOP_SETTLE_DURATION_S = 1.5
 
-# 7 s 的平地 Trot 会让机器狗停在楼梯低端前方。巡航速度过大时会提前碰到
-# 第一级踏步，过小时看不到明显接近过程；0.145 m/s 为当前安全值。
-CRUISE_FORWARD_SPEED_MPS = 0.145
-
 # 起点与钢梯中心线。起点沿用已验证关键帧的高度，X 坐标后移以保留完整接近过程。
 DEMO_START_XYZ_M = np.array((-1.600, 0.468, 0.300), dtype=np.float64)
-DEMO_CENTER_Y_M = 0.468
-
-# 机身辅助只负责小范围平衡、保持朝向和稳定前进速度。全部输出硬限幅，
-# 避免单帧数值误差把机器狗推倒；这些参数不是强化学习策略或真机控制器。
-YAW_KP = 7.5
-YAW_KD = 2.2
-YAW_TORQUE_LIMIT_NM = 9.0
-LATERAL_KP = 4.0
-LATERAL_KD = 1.8
-LATERAL_FORCE_LIMIT_N = 5.0
-ROLL_KP = 1.5
-ROLL_KD = 0.12
-ROLL_TORQUE_LIMIT_NM = 5.0
-PITCH_KP = 1.5
-PITCH_KD = 0.12
-PITCH_TORQUE_LIMIT_NM = 5.0
-FORWARD_SPEED_KP = 8.0
-FORWARD_FORCE_LIMIT_N = 4.0
 
 # 若机身在接触冲击中出现明显倾倒，只记录警告并继续保持站立控制，不自动重播。
 FALL_HEIGHT_M = 0.15
@@ -113,21 +78,104 @@ JOINT_NAMES = (
     "RL_hip_joint", "RL_thigh_joint", "RL_calf_joint",
     "RR_hip_joint", "RR_thigh_joint", "RR_calf_joint",
 )
+LEG_NAMES = ("FL", "FR", "RL", "RR")
+
+# 本入口独立保留一份最小站立/开环节律参数，避免依赖已从项目中移除的旧测试脚本。
+# Q_STAND 单位 rad；KP/KD 分别为关节位置刚度 N·m/rad 与速度阻尼 N·m·s/rad。
+Q_STAND = np.array((0.0, 0.9, -1.8) * 4, dtype=np.float64)
+KP = 60.0
+KD = 2.0
+
+# 开环 Trot 参数与历史基线一致。频率单位为 Hz，振幅单位为 rad；
+# 频率过高会增加接触冲击，振幅过大则可能造成机身横滚和足端横向漂移。
+TROT_FREQUENCY_HZ = 2.0
+HIP_ABDUCTION_AMPLITUDE_RAD = 0.02
+THIGH_AMPLITUDE_RAD = 0.18
+KNEE_AMPLITUDE_RAD = 0.14
+SWING_HEIGHT_M = 0.045
+SWING_KNEE_GAIN_RAD_PER_M = np.array(
+    (4.4, 4.4, 11.0, 11.0), dtype=np.float64
+)
+GAIT_RAMP_S = 0.8
+PAIR_PHASE_CYCLES = np.array((0.0, 0.5, 0.5, 0.0), dtype=np.float64)
+HIP_SIGNS = np.array((1.0, -1.0, 1.0, -1.0), dtype=np.float64)
+
+
+def quaternion_to_euler(
+    quaternion_wxyz: np.ndarray,
+) -> tuple[float, float, float, float]:
+    """把 MuJoCo ``w x y z`` 四元数转换为 roll/pitch/yaw 和倾角。
+
+    输入 shape=(4,)，顺序 w/x/y/z；输出角度单位均为度。倾角表示机体 Z 轴与
+    世界 Z 轴夹角，不受 yaw 影响。输入长度接近 0 或 shape 错误时抛出 ValueError。
+    重要性等级：A（姿态日志和倾倒诊断依赖该约定）。
+    """
+    quaternion = np.asarray(quaternion_wxyz, dtype=np.float64)
+    if quaternion.shape != (4,):
+        raise ValueError(f"四元数 shape 应为 (4,)，实际 {quaternion.shape}")
+    norm = float(np.linalg.norm(quaternion))
+    if norm < 1e-12:
+        raise ValueError("四元数长度接近 0")
+    w, x, y, z = quaternion / norm
+    roll = np.arctan2(2.0 * (w * x + y * z), 1.0 - 2.0 * (x * x + y * y))
+    pitch = np.arcsin(np.clip(2.0 * (w * y - z * x), -1.0, 1.0))
+    yaw = np.arctan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
+    tilt = np.arccos(np.clip(1.0 - 2.0 * (x * x + y * y), -1.0, 1.0))
+    return tuple(float(np.rad2deg(value)) for value in (roll, pitch, yaw, tilt))
+
+
+def _smoothstep01(value: float) -> float:
+    """把比例裁剪到 0..1，并返回两端导数为零的平滑过渡值。重要性等级：C。"""
+    clipped = float(np.clip(value, 0.0, 1.0))
+    return clipped * clipped * (3.0 - 2.0 * clipped)
+
+
+def generate_joint_targets(
+    trot_time_s: float,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """生成指定 Trot 时刻的 12 关节目标、摆动掩码和腿部相位。
+
+    输入 ``trot_time_s`` 为步态开始后的时间，单位 s，必须为非负有限值。
+    返回目标 shape=(12,)、掩码 shape=(4,)、相位 shape=(4,)。算法使用
+    对角腿相差半周期的正弦目标，并在摆动相额外屈膝抬脚。该函数是开环的，
+    不使用机身姿态、速度或接触反馈；输入非法时抛出 ValueError。
+    重要性等级：A（实时演示的全部步态目标由此生成）。
+    """
+    if not np.isfinite(trot_time_s) or trot_time_s < 0.0:
+        raise ValueError(f"trot_time_s 必须是非负有限值，实际 {trot_time_s}")
+    leg_phase = 2.0 * np.pi * (
+        TROT_FREQUENCY_HZ * trot_time_s + PAIR_PHASE_CYCLES
+    )
+    swing_weight = np.maximum(0.0, -np.sin(leg_phase))
+    ramp = _smoothstep01(trot_time_s / GAIT_RAMP_S)
+    target = Q_STAND.copy()
+    for leg_index in range(len(LEG_NAMES)):
+        sine = float(np.sin(leg_phase[leg_index]))
+        target[3 * leg_index] = (
+            Q_STAND[3 * leg_index]
+            + HIP_ABDUCTION_AMPLITUDE_RAD
+            * HIP_SIGNS[leg_index]
+            * sine
+            * ramp
+        )
+        target[3 * leg_index + 1] = (
+            Q_STAND[3 * leg_index + 1]
+            + THIGH_AMPLITUDE_RAD * sine * ramp
+        )
+        target[3 * leg_index + 2] = (
+            Q_STAND[3 * leg_index + 2]
+            + KNEE_AMPLITUDE_RAD * sine * ramp
+            - SWING_KNEE_GAIN_RAD_PER_M[leg_index]
+            * SWING_HEIGHT_M
+            * swing_weight[leg_index]
+            * ramp
+        )
+    if not np.all(np.isfinite(target)):
+        raise ValueError("关节目标包含 NaN 或 Inf")
+    return target, swing_weight > 1e-12, leg_phase
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-def wrap_angle_rad(angle_rad: float) -> float:
-    """把角度归一化到 [-pi, pi)。
-
-    参数：
-        angle_rad：任意有限角度，单位 rad。
-    返回：
-        与输入等价、位于 [-pi, pi) 的角度，单位 rad。
-    重要性等级：B（偏航误差必须走最短转向方向）。
-    """
-    return (float(angle_rad) + math.pi) % (2.0 * math.pi) - math.pi
-
-
 def foot_contact_flags(model: mujoco.MjModel, data: mujoco.MjData) -> tuple[bool, ...]:
     """读取四个足端当前是否接触任意物体。
 
@@ -153,14 +201,14 @@ class Go2DemoController:
     """管理 Go2 站立与持续 Trot 演示。
 
     功能：
-        本次演示从固定起点开始，先保持站立 1.5 s，再生成 Trot 关节目标并提供
-        朝向、横向、姿态和前进速度辅助，控制流程只有站立和 Trot 两种状态。
+        本次演示从固定起点开始，先保持站立 1.5 s，再生成开环 Trot 关节目标。
+        控制流程只有站立、Trot 和停稳站立三种状态，不向机身穿插外力。
     数据约定：
         data.qpos 前 7 项为机身位置与 w/x/y/z 四元数，后续为 12 个关节角；
         qpos 关节角单位为 rad，data.qvel 对应速度单位为 rad/s 或 m/s。
     生命周期：
         模型加载后创建一次；每次重置只覆盖同一 MjData，不重建模型。
-    重要性等级：A（所有关节命令和机身辅助的唯一控制入口）。
+    重要性等级：A（所有关节命令的唯一控制入口）。
     """
 
     def __init__(self, model: mujoco.MjModel) -> None:
@@ -204,7 +252,6 @@ class Go2DemoController:
                 int(model.jnt_type[base_joint_id]) != int(mujoco.mjtJoint.mjJNT_FREE)):
             raise ValueError("base body 必须由自由关节驱动")
         self.base_linear_dof_adr = int(model.jnt_dofadr[base_joint_id])
-        self.base_angular_dof_adr = self.base_linear_dof_adr + 3
 
         self.keyframe_id = mujoco.mj_name2id(
             model, mujoco.mjtObj.mjOBJ_KEY, "stairs_home"
@@ -213,7 +260,6 @@ class Go2DemoController:
             raise ValueError("scene.xml 缺少 stairs_home 关键帧")
 
         self.last_forward_speed_mps = 0.0
-        self.last_target_forward_speed_mps = 0.0
         self.last_contact_lift_count = 0
 
     def reset(self, data: mujoco.MjData) -> None:
@@ -231,7 +277,6 @@ class Go2DemoController:
         data.qfrc_applied[:] = 0.0
         mujoco.mj_forward(self.model, data)
         self.last_forward_speed_mps = 0.0
-        self.last_target_forward_speed_mps = 0.0
         self.last_contact_lift_count = 0
 
     def phase(self, data: mujoco.MjData) -> str:
@@ -265,75 +310,6 @@ class Go2DemoController:
         forward = np.array((math.cos(yaw_rad), math.sin(yaw_rad), 0.0))
         return float(np.dot(velocity_xyz, forward))
 
-    def apply_body_assist(
-        self,
-        data: mujoco.MjData,
-        target_forward_speed_mps: float,
-    ) -> None:
-        """施加限幅平衡、朝向和前进辅助力。
-
-        参数：
-            data：当前状态。
-            target_forward_speed_mps：期望前向速度，单位 m/s。
-        算法：
-            1. 偏航 PD 保持机身朝向世界 +X，横向 PD 保持钢梯中心线 Y=0.468 m。
-            2. roll/pitch PD 抑制 Trot 接触冲击带来的机身摇晃。
-            3. 前向速度 P 控制把实际速度拉向巡航目标。
-        数值边界：
-            所有力矩和力均限幅；增益过大可能振荡，过小则跟不上目标。
-        重要性等级：A（当前开环 Trot 能稳定接近楼梯的关键辅助）。
-        """
-        roll_deg, pitch_deg, yaw_deg, _tilt_deg = quaternion_to_euler(data.qpos[3:7])
-        yaw_rad = math.radians(yaw_deg)
-        angular_dof = self.base_angular_dof_adr
-
-        yaw_rate = float(data.qvel[angular_dof + 2])
-        yaw_error = wrap_angle_rad(-yaw_rad)
-        yaw_torque = float(np.clip(
-            YAW_KP * yaw_error - YAW_KD * yaw_rate,
-            -YAW_TORQUE_LIMIT_NM,
-            YAW_TORQUE_LIMIT_NM,
-        ))
-
-        y_error = DEMO_CENTER_Y_M - float(data.qpos[1])
-        y_velocity = float(data.qvel[self.base_linear_dof_adr + 1])
-        lateral_force = float(np.clip(
-            LATERAL_KP * y_error - LATERAL_KD * y_velocity,
-            -LATERAL_FORCE_LIMIT_N,
-            LATERAL_FORCE_LIMIT_N,
-        ))
-
-        roll_rate_deg_s = math.degrees(float(data.qvel[angular_dof]))
-        pitch_rate_deg_s = math.degrees(float(data.qvel[angular_dof + 1]))
-        roll_torque = float(np.clip(
-            -ROLL_KP * roll_deg - ROLL_KD * roll_rate_deg_s,
-            -ROLL_TORQUE_LIMIT_NM,
-            ROLL_TORQUE_LIMIT_NM,
-        ))
-        pitch_torque = float(np.clip(
-            -PITCH_KP * pitch_deg - PITCH_KD * pitch_rate_deg_s,
-            -PITCH_TORQUE_LIMIT_NM,
-            PITCH_TORQUE_LIMIT_NM,
-        ))
-
-        self.last_forward_speed_mps = self.body_forward_speed_mps(data, yaw_rad)
-        speed_error = target_forward_speed_mps - self.last_forward_speed_mps
-        forward_force = float(np.clip(
-            FORWARD_SPEED_KP * speed_error,
-            -FORWARD_FORCE_LIMIT_N,
-            FORWARD_FORCE_LIMIT_N,
-        ))
-        forward = np.array((math.cos(yaw_rad), math.sin(yaw_rad), 0.0))
-
-        dof = self.base_linear_dof_adr
-        data.qfrc_applied[:] = 0.0
-        data.qfrc_applied[dof] = float(forward_force * forward[0])
-        data.qfrc_applied[dof + 1] = float(forward_force * forward[1] + lateral_force)
-        data.qfrc_applied[angular_dof] = roll_torque
-        data.qfrc_applied[angular_dof + 1] = pitch_torque
-        data.qfrc_applied[angular_dof + 2] = yaw_torque
-        self.last_target_forward_speed_mps = float(target_forward_speed_mps)
-
     def write_motor_command(self, data: mujoco.MjData, target_rad: np.ndarray) -> None:
         """用关节 PD 计算 12 个 motor 的力矩命令。
 
@@ -359,7 +335,7 @@ class Go2DemoController:
         返回：
             joint_target_rad shape=(12,)，单位 rad；phase 为控制阶段。
         副作用：
-            写入 data.ctrl 和 data.qfrc_applied；不推进物理时间。
+            写入 data.ctrl；不向基座写入 qfrc_applied，也不推进物理时间。
         重要性等级：A（主循环每步调用的控制入口）。
         """
         phase = self.phase(data)
@@ -369,7 +345,6 @@ class Go2DemoController:
             joint_target = Q_STAND.copy()
             self.last_contact_lift_count = 0
             self.last_forward_speed_mps = 0.0
-            self.last_target_forward_speed_mps = 0.0
             data.qfrc_applied[:] = 0.0
             self.write_motor_command(data, joint_target)
             return joint_target, phase
@@ -386,11 +361,11 @@ class Go2DemoController:
                 lift_count += 1
         self.last_contact_lift_count = lift_count
 
-        # 起步 0.8 s 内把前向目标速度从 0 平滑拉到巡航速度，避免第一帧就施加
-        # 最大前向力。这里只平滑前进速度，不增加额外等待状态。
-        ramp = float(np.clip(gait_time_s / 0.8, 0.0, 1.0))
-        target_speed = CRUISE_FORWARD_SPEED_MPS * ramp
-        self.apply_body_assist(data, target_speed)
+        # 只记录实际前向速度供日志观察；该值不参与 Trot 控制，保证开环测试无反馈。
+        _roll, _pitch, yaw_deg, _tilt = quaternion_to_euler(data.qpos[3:7])
+        self.last_forward_speed_mps = self.body_forward_speed_mps(
+            data, math.radians(yaw_deg)
+        )
         self.write_motor_command(data, joint_target)
         return joint_target, phase
 
@@ -587,7 +562,7 @@ def main() -> int:
     except Exception as error:
         print(f"\n[错误] 仿真启动失败：{type(error).__name__}: {error}", file=sys.stderr)
         print(
-            "排查：确认 D:\\Python313\\python.exe 已安装 mujoco 和 numpy，"
+            "排查：确认当前 Python 环境已安装 mujoco 和 numpy，"
             "并确认 scene.xml 与根目录 models/ 资产完整。",
             file=sys.stderr,
         )

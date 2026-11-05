@@ -1,6 +1,8 @@
-<mujoco model="Go2 single low step collision test">
-  <!-- 单级低台阶接触测试：使用同一官方 Go2，但碰撞体是课程测试台阶，不是 STL 第一级。 -->
-  <include file="../../../models/unitree_go2/go2.xml"/>
+<mujoco model="Go2 0.04 m single low step curriculum">
+  <!-- 0.04 m 单级低台阶课程：前缘位置与 0.08 m 版本完全相同，只降低碰撞台阶高度。 -->
+  <!-- 使用同一官方 Go2；碰撞体是课程测试台阶，不是 STL 第一级。 -->
+  <!-- 只额外挂载前向 LiDAR site；不修改官方 go2.xml。 -->
+  <include file="../../../models/unitree_go2/go2_lidar.xml"/>
   <compiler angle="radian" meshdir="../../../models/unitree_go2/assets" autolimits="true"/>
 
   <visual>
@@ -28,13 +30,13 @@
     <!-- 原始楼梯 STL 仅保留视觉显示，碰撞属性关闭。 -->
     <body name="steel_stair" pos="0 0.936 0" quat="0.70710678 0.70710678 0 0">
       <geom name="steel_stair_visual" type="mesh" mesh="steel_stair_mesh" material="steel"
-            contype="0" conaffinity="0"/>
+            contype="0" conaffinity="0" group="2"/>
     </body>
 
-    <!-- 课程测试低台阶：高 0.08 m、深 0.55 m、宽 0.80 m，四足可同时落面。 -->
+    <!-- 课程测试低台阶：高 0.04 m、深 0.55 m、宽 0.80 m，四足可同时落面。 -->
     <body name="curriculum_step_collision" pos="0 0 0">
-      <geom name="curriculum_step_01" type="box" pos="-0.875 0.468 0.04"
-            size="0.275 0.40 0.04" material="steel" friction="0.8 0.02 0.01"/>
+      <geom name="curriculum_step_01" type="box" pos="-0.875 0.468 0.02"
+            size="0.275 0.40 0.02" material="steel" friction="0.8 0.02 0.01"/>
     </body>
   </worldbody>
 
@@ -53,9 +55,15 @@
   </contact>
 
   <keyframe>
-    <!-- base_z 抬高 0.08 m 并补偿官方 home 姿态下约 18.4 mm 的初始足底穿透。 -->
+    <!-- 课程起跑点：位于台阶来车侧，机头朝 +X，和台阶前缘约留 0.45 m。
+         四足落在 z=0 地面，base_z 与平地 stand_home 一致。 -->
+    <key name="single_step_approach"
+         qpos="-1.60 0.468 0.30 1 0 0 0 0 0.9 -1.8 0 0.9 -1.8 0 0.9 -1.8 0 0.9 -1.8"
+         ctrl="0 0.9 -1.8 0 0.9 -1.8 0 0.9 -1.8 0 0.9 -1.8"/>
+    <!-- 几何接触验证用起点：四足位于台阶顶面。
+         base_z 抬高 0.04 m，并保留与 0.08 m 版本相同的 11.6275 mm 足底补偿。 -->
     <key name="single_step_home"
-         qpos="-0.875 0.468 0.3683725 1 0 0 0 0 0.9 -1.8 0 0.9 -1.8 0 0.9 -1.8 0 0.9 -1.8"
+         qpos="-0.875 0.468 0.3283725 1 0 0 0 0 0.9 -1.8 0 0.9 -1.8 0 0.9 -1.8 0 0.9 -1.8"
          ctrl="0 0.9 -1.8 0 0.9 -1.8 0 0.9 -1.8 0 0.9 -1.8"/>
   </keyframe>
 

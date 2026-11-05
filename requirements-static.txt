@@ -3,3 +3,7 @@ numpy>=2.0
 Pillow>=11
 trimesh==5.2.0
 matplotlib==3.11.2
+gymnasium==1.2.1
+torch==2.14.1
+stable-baselines3==2.9.2
+tensorboard==2.21.0
