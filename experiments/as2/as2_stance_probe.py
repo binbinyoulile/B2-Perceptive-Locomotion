@@ -291,22 +291,29 @@ class Stance:
 
 
 def point_in_poly(pt, poly) -> tuple[bool, float]:
-    """返回 (是否在内, 到最近边的有符号距离，外为负)。"""
-    inside = True
-    for i in range(len(poly)):
-        ax, ay = poly[i]
-        bx, by = poly[(i + 1) % len(poly)]
-        if (bx - ax) * (pt[1] - ay) - (by - ay) * (pt[0] - ax) < 0:
-            inside = False
+    """返回 (是否在内, 到最近边的有符号距离；内为正)。
+
+    先把多边形统一成逆时针（按有符号面积判断），否则顺/逆时针会让内外判断整体翻转。
+    """
+    pts = list(poly)
+    area2 = 0.0
+    for i in range(len(pts)):
+        x1, y1 = pts[i]
+        x2, y2 = pts[(i + 1) % len(pts)]
+        area2 += x1 * y2 - x2 * y1
+    if area2 < 0:
+        pts.reverse()
     best = 1e9
-    for i in range(len(poly)):
-        ax, ay = poly[i]
-        bx, by = poly[(i + 1) % len(poly)]
+    for i in range(len(pts)):
+        ax, ay = pts[i]
+        bx, by = pts[(i + 1) % len(pts)]
         ex, ey = bx - ax, by - ay
         norm = math.hypot(ex, ey)
-        dist = (ex * (pt[1] - ay) - ey * (pt[0] - ax)) / norm if norm > 0 else 0.0
-        best = min(best, dist if inside else -dist)
-    return inside, (best if inside else -best)
+        if norm < 1e-12:
+            continue
+        dist = (ex * (pt[1] - ay) - ey * (pt[0] - ax)) / norm  # 左正右负
+        best = min(best, dist)
+    return best > 0.0, best
 
 
 def support_metrics(stance: Stance, feet) -> dict:

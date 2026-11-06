@@ -92,6 +92,7 @@ cd D:\桌面\机器狗; D:\Python313\python.exe .\reinforcement_learning\eval_fs
 - `docs/B2_CROSS_STEP_REPORT.md`：跨级姿态（前足上一级）的搜索、动力学验证与可交互预览。
 - `docs/B2_STAIR_GAIT_REPORT.md`：窄踏面爬梯步态探索（四拍爬行/单足/重心窗口分析）。
 - `docs/AS2_PLATFORM_REPORT.md`：换平台评估——AS2 官方模型、0.18 m 踏面上的三个关键站姿实测、与 B2/Go2 的横向对比、备选机型（D1 Ultra / Mini Pupper 4 / Q1）。
+- `docs/AS2_CLIMB_ATTEMPT_REPORT.md`：AS2 爬梯实测——跨级站姿 → 四拍收腿：第一条后腿收得上、第二条剩 4 mm 重心余量翻倒。
 
 ## 已知限制
 

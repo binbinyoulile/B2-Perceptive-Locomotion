@@ -54,11 +54,11 @@
       },
       "RL": {
         "inside": false,
-        "margin_mm": 164.95108714123734
+        "margin_mm": -9.798844888626443
       },
       "RR": {
         "inside": false,
-        "margin_mm": 165.8489128587626
+        "margin_mm": -10.113981136970484
       },
       "shift_fwd_m": 0.12,
       "shift_back_m": 0.075
@@ -94,11 +94,11 @@
       ],
       "FL": {
         "inside": false,
-        "margin_mm": 164.95108714123734
+        "margin_mm": -6.224364291672659
       },
       "FR": {
         "inside": false,
-        "margin_mm": 165.8489128587626
+        "margin_mm": -6.7618930935369015
       },
       "RL": {
         "inside": true,
