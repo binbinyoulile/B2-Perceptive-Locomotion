@@ -1,38 +1,56 @@
 {
-  "Go2": {
+  "GO2": {
     "support_depth_m": 0.136,
     "com_margin_m": 0.046900000000000004,
-    "required_reach_f3_m": 0.28659108499742275,
-    "reach_ratio_f3": 0.6727490258155464,
+    "same_tread_reach_m": 0.28659108499742275,
+    "same_tread_ratio": 0.6727490258155464,
+    "body_bottom_height_m": 0.2227,
     "body_clearance_m": 0.03739999999999999,
     "head_clearance_m": -0.0126,
-    "diagonal_rear_drop_m": 0.443,
-    "diagonal_rear_reach_m": 0.46770610430055326,
-    "diagonal_ratio": 1.0979016532876837,
-    "diagonal_level_possible": false
+    "diagonal_dx_m": 0.10339999999999999,
+    "diagonal_drop_m": 0.443,
+    "diagonal_reach_m": 0.45490719932751117,
+    "diagonal_ratio": 1.0678572754166928,
+    "diagonal_calf_rad": null,
+    "diagonal_calf_margin_rad": null,
+    "diagonal_possible": false,
+    "max_stand_for_diagonal_m": 0.2279607409372441,
+    "crouch_needed_m": 0.029739259062755874
   },
-  "Unitree B2": {
+  "B2": {
     "support_depth_m": 0.11599999999999999,
     "com_margin_m": 0.036699999999999997,
-    "required_reach_f3_m": 0.5405499514383477,
-    "reach_ratio_f3": 0.7722142163404968,
-    "body_clearance_m": 0.23969999999999997,
-    "head_clearance_m": 0.24469999999999997,
-    "diagonal_rear_drop_m": 0.6533,
-    "diagonal_rear_reach_m": 0.670299104877815,
-    "diagonal_ratio": 0.95757014982545,
-    "diagonal_level_possible": true
+    "same_tread_reach_m": 0.46197456639949347,
+    "same_tread_ratio": 0.6599636662849907,
+    "body_bottom_height_m": 0.33149999999999996,
+    "body_clearance_m": 0.14619999999999994,
+    "head_clearance_m": 0.15619999999999995,
+    "diagonal_dx_m": 0.23850000000000002,
+    "diagonal_drop_m": 0.5598000000000001,
+    "diagonal_reach_m": 0.6084885290619702,
+    "diagonal_ratio": 0.869269327231386,
+    "diagonal_calf_rad": -2.107444626275897,
+    "diagonal_calf_margin_rad": 0.7125553737241028,
+    "diagonal_possible": true,
+    "max_stand_for_diagonal_m": 0.4728168209368302,
+    "crouch_needed_m": -0.0983168209368302
   },
-  "GENISOM M1（估计）": {
+  "M1（估计）": {
     "support_depth_m": 0.10999999999999999,
     "com_margin_m": 0.03499999999999999,
-    "required_reach_f3_m": 0.3966106403010389,
-    "reach_ratio_f3": 0.9013878188659974,
+    "same_tread_reach_m": 0.3966106403010389,
+    "same_tread_ratio": 0.9013878188659974,
+    "body_bottom_height_m": 0.255,
     "body_clearance_m": 0.06969999999999998,
     "head_clearance_m": 0.0797,
-    "diagonal_rear_drop_m": 0.5153000000000001,
-    "diagonal_rear_reach_m": 0.5366880751423494,
-    "diagonal_ratio": 1.2197456253235213,
-    "diagonal_level_possible": false
+    "diagonal_dx_m": 0.18500000000000003,
+    "diagonal_drop_m": 0.5153000000000001,
+    "diagonal_reach_m": 0.5475025936011628,
+    "diagonal_ratio": 1.244324076366279,
+    "diagonal_calf_rad": null,
+    "diagonal_calf_margin_rad": null,
+    "diagonal_possible": false,
+    "max_stand_for_diagonal_m": 0.21391798556678276,
+    "crouch_needed_m": 0.11608201443321725
   }
 }

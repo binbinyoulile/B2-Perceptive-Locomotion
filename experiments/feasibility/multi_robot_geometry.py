@@ -1,28 +1,42 @@
 """三台四足机器人在 0.195 m / 0.18 m 钢梯上的几何可行性对比。
 
 文件目的：
-    用同一套判据比较 Go2 / Unitree B2 / GENISOM M1：
+    用同一套判据比较 Go2 / Unitree B2（标准版）/ GENISOM M1：
     1) 四足同踩一级时，支撑多边形深度与最大重心余量（只由踏面与足端半径决定）；
     2) 四足同踩一级所需的前后足中心距与腿长占用；
     3) 站上一级踏板时，机身/机头与上一级踏板的静态净空；
-    4) 逐级对角（前足高一级、后足低一级）时后腿需要的伸展量。
-整体输入：
-    台阶几何从 scene.xml 编译结果读取；机器人几何来自：
-      - Go2：configs/robot_config.py（本仓库实测）
-      - B2 ：unitree_mujoco/unitree_robots/b2/b2.xml（官方 MJCF，2026-11 取）
-      - M1 ：公开资料（41 kg、站立 920×480×585 mm、标称爬梯 25 cm）+ 显式假设
-整体输出：
-    终端表格 + experiments/feasibility/report_multi_robot.txt
+    4) 逐级对角（前足高一级、后足低一级）时后腿需要的伸展量，以及需要蹲低多少。
+
+角色与判据约定：
+    - ``D``：机身中心到“当前脚下那一级踏面”上足端球心的垂距（m）。标称站姿
+      的 D 就是 ``RobotConfig.nominal_stand_height_m``；机身离地 = D + 足端半径。
+    - 逐级对角：前足在上一级、后足在下一级，机身保持同一姿态。
+      后腿需要跨过 ``D + 级间高差``，前后足中心距按“两级踏面中心”取 ``踏面深``，
+      因此相对髋部的水平偏移 ``dx = (髋距 - 踏面深)/2``。
+    - 判据只看静态几何：不含接触时序、摩擦与动力学。结论是“几何上是否可能”，
+      不是“控制器能不能做到”。
+
+数据来源：
+    - Go2：``configs.robot_config.GO2_ROBOT``（本仓库 MJCF 实测）
+    - B2 ：``configs.robot_config.B2_ROBOT``（官方 URDF/MuJoCo 模型实测，
+      模型在 ``models/unitree_b2_mujoco/``，合计 69.003 kg）
+    - M1 ：公开资料 + 显式假设（无公开 MJCF/URDF），必须标注“估计值”
+
+⚠ 2026-11-06 修正：本脚本上一版把 ``unitree_mujoco/unitree_robots/b2/b2.xml``
+（83.5 kg，实为轮足版 B2-W 的派生模型）当成标准版 B2，并用它的 home 关键帧
+推出“站高 0.468 m”，导致对角伸展被判成 96%。标准版 B2 的正确站高是
+0.3745 m（官网站立 645 mm 反解），对角伸展为 87%。详见
+``docs/B2_VS_M1_REPORT.md`` 第 1 节。
+
 依赖与版本要求：
     Python 3.10+、mujoco 3.16、numpy 2.x。
 运行方式：
     D:\\Python313\\python.exe .\\experiments\\feasibility\\multi_robot_geometry.py
-关键假设：
-    M1 没有公开 MJCF/URDF（genisom_model 只有 zsl-1/zsl-1w，MATRiX 机器人
-    列表里也没有 m1），其腿长、足端半径、机头下沿位置均为区间假设，报告中
-    必须标注“估计值”，不能当成实测。
+整体输出：
+    终端表格 + ``report_multi_robot.txt`` / ``report_multi_robot.json``
 已知限制：
-    只做静态几何，不含动力学与接触时序；支撑多边形按足端目标点计算。
+    M1 的腿长/足端半径/站高/机头下沿全是假设；B2 的官方 CAD 69 kg 与官网
+    标称 60 kg 差 9 kg，待宇树确认。静态几何不等于动态可爬性。
 重要性等级：A（选型结论依赖这些数字）。
 """
 
@@ -37,12 +51,15 @@ from pathlib import Path
 
 import numpy as np
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 ROOT = Path(__file__).resolve().parents[2]
 SCENE = ROOT / "simulations" / "mujoco" / "go2_stairs_static" / "scene.xml"
 OUT = ROOT / "experiments" / "feasibility" / "report_multi_robot.txt"
 
 sys.path.insert(0, str(ROOT))
-from configs.robot_config import GO2_ROBOT  # noqa: E402
+from configs.robot_config import B2_ROBOT, GO2_ROBOT  # noqa: E402
 
 # 从已编译的钢梯模型读取踏面参数（与单机报告同源）。
 previous = Path.cwd()
@@ -68,9 +85,8 @@ class RobotGeometry:
         hip_spacing_m：前髋到后髋的水平距离（同侧）。
         max_reach_m：单腿最大髋—足距离（大腿+小腿两段之和）。
         foot_radius_m：足端球半径。
-        body_half_length_m：机身碰撞盒半长（含头尾凸出）。
         body_half_height_m：机身碰撞盒半高。
-        stand_height_m：稳定站立时机身中心到足端球心的垂距。
+        stand_height_m：标称站姿下机身中心到足端球心的垂距（D）。
         head_bottom_m：机头最低点相对机身中心的高度（负值）。
         com_offset_x_m：整机重心相对机身中心的 X 偏移。
         mass_kg：质量（记录值）。
@@ -81,7 +97,6 @@ class RobotGeometry:
     hip_spacing_m: float
     max_reach_m: float
     foot_radius_m: float
-    body_half_length_m: float
     body_half_height_m: float
     stand_height_m: float
     head_bottom_m: float
@@ -90,39 +105,34 @@ class RobotGeometry:
     source: str
 
 
+def from_config(robot, source: str) -> RobotGeometry:
+    """把 ``configs.robot_config.RobotConfig`` 转成几何判据需要的字段。"""
+    return RobotGeometry(
+        name=robot.name.upper(),
+        hip_spacing_m=2.0 * abs(robot.hip_x_m[0]),
+        max_reach_m=robot.max_reach_m,
+        foot_radius_m=robot.foot_radius_m,
+        body_half_height_m=robot.body_half_height_m,
+        stand_height_m=robot.nominal_stand_height_m,
+        head_bottom_m=robot.head_bottom_m,
+        com_offset_x_m=robot.com_offset_x_m,
+        mass_kg=robot.nominal_mass_kg,
+        source=source,
+    )
+
+
 ROBOTS = [
-    RobotGeometry(
-        name="Go2",
-        hip_spacing_m=2.0 * abs(GO2_ROBOT.hip_x_m[0]),
-        max_reach_m=GO2_ROBOT.thigh_length_m + GO2_ROBOT.calf_length_m,
-        foot_radius_m=GO2_ROBOT.foot_radius_m,
-        body_half_length_m=GO2_ROBOT.body_half_length_m,
-        body_half_height_m=GO2_ROBOT.body_half_height_m,
-        stand_height_m=0.2577,
-        head_bottom_m=-0.107,
-        com_offset_x_m=0.0211,
-        mass_kg=GO2_ROBOT.nominal_mass_kg,
-        source="本仓库 MJCF + 实测（configs/robot_config.py）",
+    from_config(GO2_ROBOT, "本仓库 MJCF + 实测（configs/robot_config.py）"),
+    from_config(
+        B2_ROBOT,
+        "官方 b2_description_mujoco（models/unitree_b2_mujoco，69.003 kg）+ 官网"
+        "站立尺寸 645 mm",
     ),
     RobotGeometry(
-        name="Unitree B2",
-        hip_spacing_m=2.0 * 0.3285,
-        max_reach_m=0.35 + 0.35,
-        foot_radius_m=0.032,
-        body_half_length_m=0.25,
-        body_half_height_m=0.075,
-        stand_height_m=0.468,  # MJCF home: base z=0.5，足端球心 z=0.032
-        head_bottom_m=-0.07,
-        com_offset_x_m=0.0213,
-        mass_kg=83.5,  # MJCF 合计；厂商标称约 60 kg，差异见报告
-        source="unitree_mujoco/unitree_robots/b2/b2.xml（官方 MJCF）",
-    ),
-    RobotGeometry(
-        name="GENISOM M1（估计）",
+        name="M1（估计）",
         hip_spacing_m=0.55,
         max_reach_m=0.44,
         foot_radius_m=0.035,
-        body_half_length_m=0.46,
         body_half_height_m=0.11,
         stand_height_m=0.33,
         head_bottom_m=-0.10,
@@ -132,154 +142,194 @@ ROBOTS = [
     ),
 ]
 
+# 对角姿态里前后足的水平偏移：按“两级踏面中心相距一个踏面深”取。
+DIAGONAL_FOOT_SPAN_M = TREAD_DEPTH_M
+
+# calf 关节下限（取自各自 MJCF 的 range，用于判断 IK 是否被限位卡住）。
+CALF_LIMIT_RAD = {"GO2": -2.7227, "B2": -2.82}
+
+
+def knee_angles(reach: float, thigh: float, calf: float) -> tuple[float, float]:
+    """按余弦定理把“髋—足直线距离”换成膝内角与 calf 关节角（rad）。
+
+    返回 (膝内角, calf 关节角)。两段等长且完全伸直时内角 = π、calf = 0；
+    折叠时内角变小、calf 变负，与 MJCF 的负角度约定一致。
+    """
+    cosine = (reach * reach - thigh * thigh - calf * calf) / (2.0 * thigh * calf)
+    interior = math.acos(max(-1.0, min(1.0, cosine)))
+    return interior, interior - math.pi
+
 
 def evaluate(robot: RobotGeometry) -> dict:
-    """按 0.195/0.18 场景计算四项判据。
-
-    返回字典：
-        support_depth_m：四足同踩一级时支撑多边形的前后深度上界。
-        com_margin_m：重心余量上界（支撑深度的一半减去重心偏移）。
-        required_reach_f3_m：四足同踩一级时单腿需要的髋—足距离。
-        reach_ratio_f3：该距离占最大可达半径的比例。
-        body_clearance_m：站上一级时，机身底面到上一级踏板的净空。
-        head_clearance_m：同上，但用机头最低点（更容易先撞）。
-        diagonal_rear_drop_m：对角姿态下后腿需要的垂直伸展（含级间高差）。
-        diagonal_rear_reach_m：假设后足在髋后 0.15 m 时的髋—足距离。
-        diagonal_ratio：该距离占最大可达半径的比例。
-        diagonal_level_possible：水平机身时对角姿态是否可达。
-    """
-    reach_max = robot.max_reach_m
+    """按 0.195/0.18 场景计算四项判据。"""
+    thigh = calf = 0.5 * robot.max_reach_m
     support_depth = TREAD_DEPTH_M - 2.0 * robot.foot_radius_m
     com_margin = 0.5 * support_depth - abs(robot.com_offset_x_m)
-    # 四足同踩一级：前后足中心距最大 = support_depth，每条腿要向后/向前
-    # 伸展 (hip_spacing - support_depth)/2，同时还要下降 stand_height。
-    required_reach = math.hypot(
-        0.5 * (robot.hip_spacing_m - support_depth), robot.stand_height_m
-    )
-    body_clearance = (
-        robot.foot_radius_m + robot.stand_height_m
-        - robot.body_half_height_m - RISE_M
-    )
-    head_clearance = (
-        robot.foot_radius_m + robot.stand_height_m
-        + robot.head_bottom_m - RISE_M
-    )
+    body_bottom = robot.stand_height_m + robot.foot_radius_m - robot.body_half_height_m
+
+    # 四足同踩一级：前后足中心距最大 = 支撑深度。
+    same_tread_dx = 0.5 * (robot.hip_spacing_m - support_depth)
+    same_tread_reach = math.hypot(same_tread_dx, robot.stand_height_m)
+
+    # 逐级对角：后腿要跨过“站高 + 级间高差”。
+    diagonal_dx = 0.5 * (robot.hip_spacing_m - DIAGONAL_FOOT_SPAN_M)
     diagonal_drop = robot.stand_height_m + RISE_M
-    diagonal_reach = math.hypot(0.15, diagonal_drop)
+    diagonal_reach = math.hypot(diagonal_dx, diagonal_drop)
+    calf_limit = CALF_LIMIT_RAD.get(robot.name, -2.82)
+    # 超过可达半径时反解无意义（cos 会被截断），显式记成“无解”。
+    if diagonal_reach <= robot.max_reach_m:
+        _, calf_angle = knee_angles(diagonal_reach, thigh, calf)
+        calf_margin = calf_angle - calf_limit
+    else:
+        calf_angle = None
+        calf_margin = None
+    # 允许的最高站高：把后腿伸展压到 100% 时对应的 D。
+    max_stand_for_diagonal = math.sqrt(
+        max(0.0, robot.max_reach_m ** 2 - diagonal_dx ** 2)
+    ) - RISE_M
     return {
         "support_depth_m": support_depth,
         "com_margin_m": com_margin,
-        "required_reach_f3_m": required_reach,
-        "reach_ratio_f3": required_reach / reach_max,
-        "body_clearance_m": body_clearance,
-        "head_clearance_m": head_clearance,
-        "diagonal_rear_drop_m": diagonal_drop,
-        "diagonal_rear_reach_m": diagonal_reach,
-        "diagonal_ratio": diagonal_reach / reach_max,
-        "diagonal_level_possible": diagonal_reach <= reach_max,
+        "same_tread_reach_m": same_tread_reach,
+        "same_tread_ratio": same_tread_reach / robot.max_reach_m,
+        "body_bottom_height_m": body_bottom,
+        "body_clearance_m": body_bottom - RISE_M,
+        "head_clearance_m": robot.stand_height_m + robot.foot_radius_m
+        + robot.head_bottom_m - RISE_M,
+        "diagonal_dx_m": diagonal_dx,
+        "diagonal_drop_m": diagonal_drop,
+        "diagonal_reach_m": diagonal_reach,
+        "diagonal_ratio": diagonal_reach / robot.max_reach_m,
+        "diagonal_calf_rad": calf_angle,
+        "diagonal_calf_margin_rad": calf_margin,
+        "diagonal_possible": calf_margin is not None and calf_margin >= 0.0,
+        "max_stand_for_diagonal_m": max_stand_for_diagonal,
+        "crouch_needed_m": robot.stand_height_m - max_stand_for_diagonal,
     }
 
 
-if hasattr(sys.stdout, 'reconfigure'):
-    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
-
-
 def main() -> int:
-    lines = []
+    lines: list[str] = []
+
     def say(text: str = "") -> None:
         lines.append(text)
 
-    say("=" * 92)
+    say("=" * 96)
     say("三台四足机器人在 0.195 m 台阶 / 0.18 m 踏面上的几何可行性")
-    say("=" * 92)
+    say("=" * 96)
     say(
         "场景：踏面深 %.4f m，第一级顶面 %.4f m，级间高差 %.4f m（从 scene.xml 编译结果读取）"
         % (TREAD_DEPTH_M, STEP1_TOP_M, RISE_M)
     )
-    say()
     say(
-        "判据说明：支撑深度 = 踏面深 - 2×足端半径，与腿长无关；重心余量上界 = "
-        "支撑深度/2 - |重心偏移|。"
+        "判据：支撑深度 = 踏面深 - 2×足端半径（只由踏面决定）；重心余量上界 = "
+        "支撑深度/2 - |重心偏移|；对角后腿需跨 D + 级间高差，D 为机身中心到脚下踏面的足心垂距。"
     )
     say()
-    header = (
-        "%-18s %8s %8s %8s %9s %9s %9s %9s"
-        % ("机器人", "可达m", "支撑深", "重心余", "同踩需伸", "占比", "机头净空", "对角占比")
+
+    results = {robot.name: evaluate(robot) for robot in ROBOTS}
+
+    header = "%-12s %7s %7s %7s %7s %8s %8s %8s %8s" % (
+        "机器人", "可达m", "支撑深", "重心余", "同踩占比", "机身净空", "机头净空", "对角占比", "蹲低需求",
     )
     say(header)
-    say("-" * 92)
-    results = {}
+    say("-" * 96)
     for robot in ROBOTS:
-        item = evaluate(robot)
-        results[robot.name] = item
+        item = results[robot.name]
         say(
-            "%-18s %8.3f %8.3f %8.3f %9.3f %8.1f%% %9.3f %8.1f%%"
+            "%-12s %7.3f %7.3f %7.3f %6.1f%% %8.3f %8.3f %7.1f%% %8s"
             % (
                 robot.name,
                 robot.max_reach_m,
                 item["support_depth_m"],
                 item["com_margin_m"],
-                item["required_reach_f3_m"],
-                100.0 * item["reach_ratio_f3"],
+                100.0 * item["same_tread_ratio"],
+                item["body_clearance_m"],
                 item["head_clearance_m"],
                 100.0 * item["diagonal_ratio"],
+                ("%.3f m" % item["crouch_needed_m"]) if item["crouch_needed_m"] > 0 else "不需要",
             )
         )
     say()
-    say("详细数值：")
+
+    say("逐台细节：")
     for robot in ROBOTS:
         item = results[robot.name]
         say("  [%s] 来源: %s" % (robot.name, robot.source))
         say(
-            "    质量(记录)=%.1f kg  髋距=%.3f m  站高=%.3f m  足端半径=%.3f m"
-            % (
-                robot.mass_kg,
-                robot.hip_spacing_m,
-                robot.stand_height_m,
-                robot.foot_radius_m,
-            )
+            "    质量=%.3f kg  髋距=%.3f m  站高D=%.4f m  足端半径=%.3f m  机身半高=%.3f m"
+            % (robot.mass_kg, robot.hip_spacing_m, robot.stand_height_m,
+               robot.foot_radius_m, robot.body_half_height_m)
         )
         say(
-            "    四足同踩一级: 需要髋-足 %.3f m（占可达 %.1f%%）；机身底面净空 %.3f m；"
-            "机头最低点净空 %.3f m"
-            % (
-                item["required_reach_f3_m"],
-                100.0 * item["reach_ratio_f3"],
-                item["body_clearance_m"],
-                item["head_clearance_m"],
-            )
+            "    四足同踩一级: 髋—足需 %.3f m（%.1f%%）；机身底面离一级顶面 %.3f m；机头 %.3f m"
+            % (item["same_tread_reach_m"], 100.0 * item["same_tread_ratio"],
+               item["body_clearance_m"], item["head_clearance_m"])
         )
+        if item["diagonal_calf_rad"] is None:
+            calf_text = "超出可达半径（反解无解）"
+        else:
+            calf_text = "calf=%.3f rad（限位 %.2f，余 %.3f）" % (
+                item["diagonal_calf_rad"],
+                CALF_LIMIT_RAD.get(robot.name, -2.82),
+                item["diagonal_calf_margin_rad"],
+            )
         say(
-            "    逐级对角(水平机身): 后腿需伸展 %.3f m（占可达 %.1f%%）→ %s"
+            "    逐级对角: 水平偏移 dx=%.3f m，后腿需跨 %.3f m（%.1f%%）；%s → %s"
             % (
-                item["diagonal_rear_reach_m"],
-                100.0 * item["diagonal_ratio"],
-                "可达" if item["diagonal_level_possible"] else "不可达，必须抬机头或蹲低",
+                item["diagonal_dx_m"], item["diagonal_reach_m"],
+                100.0 * item["diagonal_ratio"], calf_text,
+                "可达" if item["diagonal_possible"] else "超出可达半径/关节限位",
             )
         )
+        if item["crouch_needed_m"] > 1e-4:
+            say(
+                "      对角伸展 100%% 对应的最高站高 D=%.3f m，比标称低 %.3f m → 必须蹲低"
+                % (item["max_stand_for_diagonal_m"], item["crouch_needed_m"])
+            )
+        else:
+            say(
+                "      对角伸展 100%% 对应 D=%.3f m，比标称高 %.3f m → 标称站高下有余量"
+                % (item["max_stand_for_diagonal_m"], -item["crouch_needed_m"])
+            )
         if item["head_clearance_m"] < 0.0:
-            say("    [!] 机头在水平机身下会与上一级踏板重叠，必须抬机头（Go2 实测需要 14°~30°）")
+            say("      [!] 机头在水平机身下会插进上一级踏板，必须抬机头")
         say()
 
-    say("-" * 92)
-    say("结论要点：")
-    say("1) 0.18 m 踏面把四足同踩一级的支撑深度压到 %.2f~%.2f m，重心余量上界只有 "
-        "%.1f~%.1f cm；这个数只由踏面与足端半径决定，换更长的腿不会变大。"
+    b2 = results["B2"]
+    go2 = results["GO2"]
+    say("-" * 96)
+    say("结论：")
+    say(
+        "1) 踏面宽度仍是硬约束：三台的重心余量上界只有 %.1f~%.1f cm，"
+        "其中 B2 为 %.1f cm；这个数只由踏面与足端半径决定，换更长的腿也不会变大。"
         % (
-            min(r["support_depth_m"] for r in results.values()),
-            max(r["support_depth_m"] for r in results.values()),
             100.0 * min(r["com_margin_m"] for r in results.values()),
             100.0 * max(r["com_margin_m"] for r in results.values()),
-        ))
-    say("2) 换狗真正改善的是“机身/机头净空”和“腿部伸展余量”：Go2 机头净空为负，"
-        "B2 约 0.24 m；对角姿态的伸展占比 Go2 >100%%（水平时不可达），B2 约 %.0f%%。"
-        % (100.0 * results["Unitree B2"]["diagonal_ratio"]))
-    say("3) 因此三台车在这个场景都应采用“逐级对角”，但 Go2 需要抬机头 14°~30°、"
-        "B2 需要蹲低或抬机头来换取后腿余量。踏面宽度是比腿长更硬的约束。")
+            100.0 * b2["com_margin_m"],
+        )
+    )
+    say(
+        "2) 标准版 B2 的机头净空 %.3f m、机身净空 %.3f m，都大于 10 cm；"
+        "Go2 的机头净空 %.3f m（为负）。"
+        % (b2["head_clearance_m"], b2["body_clearance_m"], go2["head_clearance_m"])
+    )
+    say(
+        "3) 对角步态：标准版 B2 后腿伸展 %.1f%%（calf %.2f rad，离限位 0.7 rad 以上），"
+        "标称站高下就够用；Go2 %.1f%%（>100%%，且机头为负 → 只能抬机头换空间）。"
+        % (100.0 * b2["diagonal_ratio"], b2["diagonal_calf_rad"],
+           100.0 * go2["diagonal_ratio"])
+    )
+    say(
+        "4) 上一版把 B2 写成 96%%、24 cm 净空，是用轮足版 B2-W 的派生 MJCF"
+        "（83.5 kg、home 站高 0.468 m）算的；标准版 B2 的正确值是 %.1f%%、"
+        "%.1f cm。方向不变（B2 可行），余量比原先更大。"
+        % (100.0 * b2["diagonal_ratio"], 100.0 * b2["head_clearance_m"])
+    )
 
     text = "\n".join(lines)
-    OUT.write_text(text, encoding="utf-8")
-    (OUT.with_suffix(".json")).write_text(
+    OUT.write_text(text + "\n", encoding="utf-8")
+    OUT.with_suffix(".json").write_text(
         json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8"
     )
     print(text)
