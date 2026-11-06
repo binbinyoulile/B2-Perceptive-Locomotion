@@ -89,6 +89,7 @@ cd D:\桌面\机器狗; D:\Python313\python.exe .\reinforcement_learning\eval_fs
 - `docs/GO2_LIMIT_REPORT.md`：0.195 m / 0.18 m 钢梯的物理极限测试与死局因素分析。
 - `docs/B2_VS_M1_REPORT.md`：B2 与 M1 的任务可行性、仿真生态对比与 Sim2Sim 接口规划。
 - `docs/B2_STAND_LOAD_REPORT.md`：B2 参数固化、场景摩擦调整与平地站立/钢梯加载实测。
+- `docs/B2_CROSS_STEP_REPORT.md`：跨级姿态（前足上一级）的搜索、动力学验证与可交互预览。
 
 ## 已知限制
 

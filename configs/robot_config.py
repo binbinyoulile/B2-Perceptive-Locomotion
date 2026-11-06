@@ -63,6 +63,35 @@ class FsmConfig:
 
 
 @dataclass(frozen=True)
+class CrossStepConfig:
+    """跨级姿态：前足踩 0.195 m 第一级踏面、后足在平地上的静态站位。
+
+    这不是"出生姿态"，而是爬梯过程中必然经过的一个支撑相。数值由
+    ``experiments/b2/b2_step_pose.py`` 搜索得到，并在 kp/kd 下跑 4 s PD 实测过。
+    字段：
+        base_xyz：机身世界坐标（m），y 一般取场景中轴。
+        pitch_deg：抬头角（正 = 机头向上）。
+        joint_rad：12 维目标角，顺序 FL/FR/RL/RR × hip/thigh/calf。
+        rear_foot_x_m：后足足心世界 x（前足固定在踏面中心 x=0.3066）。
+        head_clearance_m / body_clearance_m / shin_clearance_m：搜索时的几何净空。
+        settled_base_z_m：PD 落地稳定后的机身高度（指令高度会下沉约 2 cm）。
+    """
+
+    name: str
+    base_xyz: Tuple[float, float, float]
+    pitch_deg: float
+    joint_rad: Tuple[float, ...]
+    rear_foot_x_m: float
+    kp: float
+    kd: float
+    head_clearance_m: float
+    body_clearance_m: float
+    shin_clearance_m: float
+    settled_base_z_m: float
+    source: str
+
+
+@dataclass(frozen=True)
 class RobotConfig:
     """一台四足机器人的完整硬件/控制契约。
 
@@ -265,6 +294,33 @@ B2_ROBOT = RobotConfig(
         gravity_feedforward_scale=1.0,
         residual_scale=0.10,
     ),
+)
+
+# 跨级姿态（前足踩 0.195 m 第一级、后足在地面）。由 experiments/b2/b2_step_pose.py
+# 在 (pitch, 机身 x/z, 后足 x) 上搜索 + 4 s PD 实测得到：
+#   - 抬头 18°：指令姿态下机头离二级踏板 24.4 cm，落地后复测 23.7 cm
+#     （机身 27.9 cm、前腿护板 3.9 cm，都远大于 5 cm 的门槛）；
+#   - 关节最小余量 1.11 rad（calf 最深 −1.711，限位 −2.82）；
+#   - kp 800 下落地稳定在机身 0.559 m，抖动 0.34 mm，后足稳态滑移 0.11 mm。
+# 预览：D:\Python313\python.exe .\experiments\b2\b2_step_view.py
+B2_CROSS_STEP = CrossStepConfig(
+    name="b2_cross_step_195",
+    base_xyz=(-0.070, 0.468, 0.580),
+    pitch_deg=18.0,
+    joint_rad=(
+        0.0, 1.0296, -1.7113,   # FL
+        0.0, 1.0296, -1.7113,   # FR
+        0.0, 1.4531, -1.6801,   # RL
+        0.0, 1.4531, -1.6801,   # RR
+    ),
+    rear_foot_x_m=-0.520,
+    kp=800.0,
+    kd=20.0,
+    head_clearance_m=0.237,
+    body_clearance_m=0.279,
+    shin_clearance_m=0.039,
+    settled_base_z_m=0.5589,
+    source="experiments/b2/b2_step_pose.py（搜索 + 4 s PD 实测）",
 )
 
 # B2 已注册：硬件参数按官方 MJCF 固化（不再等厂商校准）。步态与 FSM 增益仍是
