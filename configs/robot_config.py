@@ -20,9 +20,9 @@
        成功判定必须用实测稳定高度，不能直接用这里的数值。
     3. 雷达安装位是 XML 的事实记录，供文档/脚本核对；运行时不改模型。
 已知限制：
-    Go2 是“已在本仓库验证过”的实例；B2 只有硬件参数（官方 URDF/MJCF 实测），
-    步态、FSM 增益、跌倒阈值与足端 geom 名都还没标定，因此没有注册进
-    ``ROBOT_REGISTRY``。M1 没有公开模型，暂不建实例。
+    Go2 是“已在本仓库验证过”的实例；B2 的几何/质量/力矩/摩擦已按官方 MJCF 固化，
+    但步态、FSM 增益、跌倒阈值与足端 geom 名仍是未标定值（接训练前必须重标）。
+    M1 没有公开模型，暂不建实例。
 重要性等级：A（改错会同时破坏训练、回放与规则教师）。
 """
 
@@ -94,6 +94,8 @@ class RobotConfig:
     head_bottom_m: float
     com_offset_x_m: float
     nominal_mass_kg: float
+    joint_torque_nm: Tuple[float, float, float]
+    foot_friction: float
     expected_nq: int
     expected_nv: int
     expected_nu: int
@@ -151,6 +153,9 @@ GO2_ROBOT = RobotConfig(
     head_bottom_m=-0.107,
     com_offset_x_m=0.0211,
     nominal_mass_kg=15.206,
+    # hip/thigh/calf 的力矩上限（Go2 MJCF 执行器 ctrlrange 实测）
+    joint_torque_nm=(23.7, 23.7, 45.43),
+    foot_friction=0.8,
     expected_nq=19,
     expected_nv=18,
     expected_nu=12,
@@ -205,9 +210,14 @@ B2_ROBOT = RobotConfig(
     base_body_name="base_link",
     # 官方模型只有 imu 一个 site，雷达没有 site；坐标同 lidar_mount_pos_m。
     lidar_site_name="imu",
-    # 由官方“站立尺寸 645 mm”反解：机身中心离地 0.4065 m（645 − 雷达顶 238.5 mm），
-    # 减足端半径 0.032 得髋—足垂距 0.3745 m；对称站姿 θ_thigh=1.006、θ_calf=-2.012。
-    stand_joint_rad=np.tile(np.array((0.0, 1.006, -2.012), dtype=np.float64), 4),
+    # 站姿：对称深蹲 (thigh 0.9649, calf −1.9298)，对应悬空 D=0.3986 m。
+    # 这是“指令角”（悬空）；落地后 PD 下沉约 2.5 cm，稳定在机身 0.4064 m，
+    # 加雷达顶 0.2385 m = 0.6449 m ≈ 官网 645 mm。实测峰峰抖动 0.001 mm。
+    # 注：unitree_rl_lab 里 UNITREE_B2_CFG 的 (0.8/1.0, −1.5) 是它家 RL 的默认站姿，
+    # 落地后机身 0.526 m（总高 0.765 m），不是官网 645 mm 的那个姿态，故不采用。
+    stand_joint_rad=np.tile(
+        np.array((0.0, 0.9649, -1.9298), dtype=np.float64), 4
+    ),
     thigh_length_m=0.35,
     calf_length_m=0.35,
     foot_radius_m=0.032,
@@ -218,19 +228,31 @@ B2_ROBOT = RobotConfig(
     lidar_mount_pos_m=(0.34218, 0.0, 0.17851),
     body_half_length_m=0.25,
     body_half_height_m=0.075,
+    # 机身中心离地：官网 645 mm 是总高（含雷达顶 0.2385 m），故 0.645 − 0.2385 =
+    # 0.4065 m；减足端半径 0.032 得 D=0.3745 m。本仓库标定后的 PD 站姿实测
+    # 0.4064 m（D=0.3744），差 1 mm。
     nominal_stand_height_m=0.3745,
     # 机头碰撞盒 pos z=0.005、半高 0.07 → 下沿 −0.065；机身盒下沿 −0.075 更低。
     head_bottom_m=-0.065,
     com_offset_x_m=0.0213,
-    # 官方 CAD 69.003 kg；官网标称 60 kg（含电池）。差 9 kg，向宇树确认配置前，
-    # 动力学仿真用 CAD 值（更保守）。
+    # 官方 CAD 69.003 kg；官网标称 60 kg（含电池）。已按用户决定：不再等厂商核对，
+    # 直接用 MJCF 的保守值（比标称重 9 kg，动力学更悲观）。
     nominal_mass_kg=69.003,
+    # 关节额定力矩：hip/thigh 200、calf 320 N·m（官方 URDF <limit effort> 与
+    # unitree_rl_lab 的 UNITREE_B2_CFG 一致）。注意 MJCF 执行器 ctrlrange 只写
+    # 300 N·m，仿真里实际限幅是 300；选型与热分析按 320 记录。
+    joint_torque_nm=(200.0, 200.0, 320.0),
+    # 足端橡胶摩擦。场景踏步按防滑格栅取 0.9，MuJoCo 取两者逐元素最大值，
+    # 因此接触等效 μ=0.9（足端 0.4 会被地面覆盖，见 docs 里的一节说明）。
+    foot_friction=0.4,
     expected_nq=19,
     expected_nv=18,
     expected_nu=12,
-    # 来自 unitree_rl_lab 的 UNITREE_B2_CFG（Isaac Lab 官方配置），本仓库未标定。
-    kp=160.0,
-    kd=5.0,
+    # 被动站立标定（本仓库实测，2026-11-06）：官方 Isaac 的 160/5 在没有上层
+    # 控制器时托不住 69 kg——髋关节会缓慢外张（0.39 rad）并最终塌到机身 0.24 m；
+    # 800/20 在 50 Hz 控制下稳定（峰峰 0.001 mm），1600 以上在 50 Hz 反而发散。
+    kp=800.0,
+    kd=20.0,
     joint_limit_margin_rad=0.05,
     fall_height_m=0.20,  # 未标定：按站高 0.4065 m 的比例粗设，接入时必须重标
     fall_tilt_rad=np.radians(60.0),
@@ -238,16 +260,16 @@ B2_ROBOT = RobotConfig(
     trot=GO2_ROBOT.trot,
     fsm=FsmConfig(
         control_hz=50.0,
-        pd_kp=(160.0, 160.0, 160.0) * 4,  # Isaac Lab B2 cfg；本仓库未标定
-        pd_kd=(5.0, 5.0, 5.0) * 4,
+        pd_kp=(800.0, 800.0, 800.0) * 4,  # 被动站立标定值，见 kp/kd 注释
+        pd_kd=(20.0, 20.0, 20.0) * 4,
         gravity_feedforward_scale=1.0,
         residual_scale=0.10,
     ),
 )
 
-# B2 暂不注册：还没有接入本仓库的场景与控制器，注册会让人误以为可以直接跑。
-# 等 models/unitree_b2_mujoco 接进 go2_env、步态与阈值标定完成后再加进来。
-ROBOT_REGISTRY = {GO2_ROBOT.name: GO2_ROBOT}
+# B2 已注册：硬件参数按官方 MJCF 固化（不再等厂商校准）。步态与 FSM 增益仍是
+# 未标定值，接训练前必须重标；但几何/质量/力矩/摩擦已经是“可复现的定值”。
+ROBOT_REGISTRY = {GO2_ROBOT.name: GO2_ROBOT, B2_ROBOT.name: B2_ROBOT}
 
 
 def get_robot(name: str = "go2") -> RobotConfig:

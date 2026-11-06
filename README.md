@@ -88,6 +88,7 @@ cd D:\桌面\机器狗; D:\Python313\python.exe .\reinforcement_learning\eval_fs
 - `docs/FSM_STAGE_REPORT.md`：FSM 阶段进展、短测结果和已知限制。
 - `docs/GO2_LIMIT_REPORT.md`：0.195 m / 0.18 m 钢梯的物理极限测试与死局因素分析。
 - `docs/B2_VS_M1_REPORT.md`：B2 与 M1 的任务可行性、仿真生态对比与 Sim2Sim 接口规划。
+- `docs/B2_STAND_LOAD_REPORT.md`：B2 参数固化、场景摩擦调整与平地站立/钢梯加载实测。
 
 ## 已知限制
 
