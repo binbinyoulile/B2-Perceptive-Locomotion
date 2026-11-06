@@ -93,6 +93,7 @@ cd D:\桌面\机器狗; D:\Python313\python.exe .\reinforcement_learning\eval_fs
 - `docs/B2_STAIR_GAIT_REPORT.md`：窄踏面爬梯步态探索（四拍爬行/单足/重心窗口分析）。
 - `docs/AS2_PLATFORM_REPORT.md`：换平台评估——AS2 官方模型、0.18 m 踏面上的三个关键站姿实测、与 B2/Go2 的横向对比、备选机型（D1 Ultra / Mini Pupper 4 / Q1）。
 - `docs/AS2_CLIMB_ATTEMPT_REPORT.md`：AS2 爬梯实测——跨级站姿 → 四拍收腿：第一条后腿收得上、第二条剩 4 mm 重心余量翻倒。
+- `docs/B2_STAGGERED_STANCE_REPORT.md`：B2 错位对角姿态（四足分踩第 3/2/1/0 级）——静态能站住、重心余量 16.5 cm，对角交叉步抬脚即塌。
 
 ## 已知限制
 
