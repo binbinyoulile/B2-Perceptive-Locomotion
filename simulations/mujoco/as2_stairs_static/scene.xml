@@ -1,0 +1,39 @@
+<mujoco model="AS2 on open steel stair with simplified collision">
+  <!-- 官方 Unitree AS2（标准纯四足版）MJCF：自由基座、12 个驱动关节和碰撞体。
+       资产来自 unitree_ros/robots/as2_description（2026 年官方新增目录），
+       见 models/unitree_as2_mujoco。质量 17.64 kg（MJCF 口径，厂商整机 20 kg 含电池）。 -->
+  <include file="../../../models/unitree_as2_mujoco/xml/as2.xml"/>
+  <compiler angle="radian" meshdir="../../../models/unitree_as2_mujoco/meshes" autolimits="true"/>
+
+  <visual>
+    <global offwidth="1280" offheight="720" azimuth="145" elevation="-22"/>
+    <headlight ambient="0.35 0.35 0.35" diffuse="0.7 0.7 0.7" specular="0.25 0.25 0.25"/>
+    <rgba haze="0.12 0.18 0.24 1"/>
+    <map znear="0.02" zfar="100"/>
+  </visual>
+
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1="0.28 0.42 0.58" rgb2="0.03 0.05 0.08" width="512" height="3072"/>
+    <texture name="grid" type="2d" builtin="checker" width="512" height="512"
+             rgb1="0.16 0.18 0.20" rgb2="0.22 0.24 0.26"/>
+    <material name="grid" texture="grid" texrepeat="12 12" reflectance="0.05"/>
+    <material name="steel" rgba="0.42 0.48 0.54 1" specular="0.75" shininess="0.7" reflectance="0.2"/>
+    <mesh name="steel_stair_mesh" file="../../stairs/steel_stair.STL" scale="0.001 0.001 0.001"/>
+  </asset>
+
+  <worldbody>
+    <light name="key" pos="2.0 -2.5 4.0" dir="0 0 -1" directional="true"/>
+    <include file="../steel_stair/stair_bodies.xml"/>
+  </worldbody>
+
+  <keyframe>
+    <!-- AS2 站在楼梯低端前方并朝向 +X。nominal 站姿由两连杆逆解得到：
+         髋高 0.33 m（厂商整机高 457 mm 对得上），四腿对称 thigh 0.7906 / calf −1.563。
+         z=0.35 是投放高度，落地后稳定在机身约 0.33 m。 -->
+    <key name="as2_stairs_home"
+         qpos="-0.90 0.468 0.35 1 0 0 0 0 0.7906 -1.563 0 0.7906 -1.563 0 0.7906 -1.563 0 0.7906 -1.563"
+         ctrl="0 0.7906 -1.563 0 0.7906 -1.563 0 0.7906 -1.563 0 0.7906 -1.563"/>
+  </keyframe>
+
+  <statistic center="1.55 0.468 0.50" extent="5.0"/>
+</mujoco>
