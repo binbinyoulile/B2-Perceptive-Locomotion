@@ -536,7 +536,7 @@ def hold(rig: Rig, fg, feet, body, seconds: float = 1.5):
             "ext": ext, "body": body}
 
 
-def run_plan(rig: Rig, segs: list[Seg], fg, sync=None, hook=None):
+def run_plan(rig: Rig, segs: list[Seg], fg, sync=None, hook=None, body_servo: float = 0.0):
     """按计划推进；一旦跌落就停在出错的那一段（继续推只会得到一堆地板数据）。"""
     model, data = rig.model, rig.data
     joints0, _ = legs_ik(rig, segs[0].body_a, segs[0].feet_a)
@@ -549,6 +549,7 @@ def run_plan(rig: Rig, segs: list[Seg], fg, sync=None, hook=None):
     foot_z0 = {leg: float(data.geom_xpos[fg[leg]][2]) for leg in LEGS}
     failed_at, fell = None, False
     iu = None
+    last_joints = joints0
 
     for seg in segs:
         ba, bb = np.asarray(seg.body_a, float), np.asarray(seg.body_b, float)
@@ -556,6 +557,8 @@ def run_plan(rig: Rig, segs: list[Seg], fg, sync=None, hook=None):
         fb = {k: np.asarray(v, float) for k, v in seg.feet_b.items()}
         planted = {leg: data.geom_xpos[fg[leg]][:2].copy() for leg in LEGS if leg != seg.lift}
         seg_peak = 0.0
+        seg_lift = 0.0
+        z_src = float(data.geom_xpos[fg[seg.lift]][2]) if seg.lift else 0.0
         n = max(1, int(round(seg.dur * 50.0)))
         for i in range(n):
             u = (i + 1) / n
@@ -567,11 +570,21 @@ def run_plan(rig: Rig, segs: list[Seg], fg, sync=None, hook=None):
                     feet[leg] = lift_profile(fa[leg], fb[leg], seg.z_clear, u)
                 else:
                     feet[leg] = fa[leg] + (fb[leg] - fa[leg]) * sm
-            joints, _ = legs_ik(rig, tuple(body), feet)
+            # 机身位姿伺服：0 = 纯开环（按计划位姿算 IK）；>0 = 用实测位姿误差把机体往计划上顶
+            body_cmd = body
+            if body_servo > 0.0:
+                meas = np.array([data.qpos[0], data.qpos[1], data.qpos[2], pitch_of(data)])
+                # 实测比计划"落后"时，按计划再往前多推 k 倍 → 腿把机身顶回计划位姿
+                body_cmd = body + body_servo * (body - meas)
+            joints, _ = legs_ik(rig, tuple(body_cmd), feet)
             if joints is None:
-                failed_at = f"{seg.name}（轨迹中段 IK 不可达）"
-                fell = True
-                break
+                if body_servo > 0.0:
+                    joints = last_joints          # 伺服把目标顶出可达范围：退回上一步的角度
+                else:
+                    failed_at = f"{seg.name}（轨迹中段 IK 不可达）"
+                    fell = True
+                    break
+            last_joints = joints
             lp.step(joints)
             seg_peak = max(seg_peak, lp.last)
             if hook is not None:
@@ -582,6 +595,7 @@ def run_plan(rig: Rig, segs: list[Seg], fg, sync=None, hook=None):
             if seg.lift:
                 lift_peak[seg.lift] = max(lift_peak[seg.lift],
                                           float(data.geom_xpos[fg[seg.lift]][2]) - foot_z0[seg.lift])
+                seg_lift = max(seg_lift, float(data.geom_xpos[fg[seg.lift]][2]) - z_src)
             if data.qpos[2] < z_start - 0.10 or max_tilt > 45.0:
                 failed_at = seg.name
                 fell = True
@@ -596,10 +610,13 @@ def run_plan(rig: Rig, segs: list[Seg], fg, sync=None, hook=None):
                           "sink": float(bb[2] - data.qpos[2]),
                           "slip_mm": max(float(np.linalg.norm(
                               data.geom_xpos[fg[l]][:2] - iu[l])) * 1000 for l in LEGS if l != seg.lift),
-                          "tilt": max_tilt, "peak": seg_peak})
+                          "tilt": max_tilt, "peak": seg_peak, "lift": seg_lift,
+                          "feet_z": {l: float(data.geom_xpos[fg[l]][2]) for l in LEGS}})
+    worst = max(rig.act.items(), key=lambda kv: lp.peak[kv[1]])
     return {
         "x": float(data.qpos[0]), "z": float(data.qpos[2]),
         "max_tilt": max_tilt, "peak_tau": max(lp.peak.values()),
+        "peak_act": f"{worst[0][0]}_{worst[0][1]}",
         "sat_frac": lp.sat / max(1, lp.steps),
         "lift_m": lift_peak, "beats": beats, "failed_at": failed_at, "fell": fell,
         "feet_z": {leg: float(data.geom_xpos[fg[leg]][2]) for leg in LEGS},
@@ -964,12 +981,12 @@ def check_env() -> int:
 
 
 # ---------------------------------------------------------------- 3D 演示
-def pacer(viewer, on_frame=None):
-    """返回一个 sync 回调：补足 20 ms（50 Hz 真实时间），并可选地在每帧改相机。"""
+def pacer(viewer, on_frame=None, hz: float = 50.0):
+    """返回一个 sync 回调：补足 1/hz 秒（默认 50 Hz 真实时间），可用来慢放（hz<50）。"""
     last = [0.0]
 
     def sync() -> None:
-        rest = 1.0 / 50.0 - (time.perf_counter() - last[0])
+        rest = 1.0 / hz - (time.perf_counter() - last[0])
         if rest > 0:
             time.sleep(rest)
         if on_frame is not None:

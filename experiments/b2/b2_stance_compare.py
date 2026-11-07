@@ -61,9 +61,7 @@ OUT_JSON = ROOT / "experiments" / "b2" / "b2_stance_compare.json"
 OUT_PNG = ROOT / "experiments" / "b2" / "b2_stance_compare.png"
 
 EXT_CAP = 0.95        # 题目要求 <95%
-LEG_CLEAR = 0.030     # 除足端球以外、机器人任何碰撞体离梯级的净空
-                      # （题目要求是"不碰撞"= >0；这里留 30 mm，因为 PD 静置
-                      #   实测下沉 2.7 cm，10 mm 的净空会被吃掉后压在台阶上）
+LEG_CLEAR = D.LEG_CLEAR
 PITCH_HI = 30.0       # 题目允许抬头到 30°
 MARGIN_TOL = 0.010    # "关节优先"解允许比最大余量少 1 cm
 
@@ -96,27 +94,6 @@ def nose_gap(rig: G.Rig, pose: dict) -> float:
                      for g in rig.plate_gids))
 
 
-def self_gids(rig: G.Rig, fg) -> list[int]:
-    """机器人身上真正会碰撞的 geom，去掉四只足端球（它们本来就要压在踏面上）。"""
-    feet_ids = set(fg.values())
-    m = rig.model
-    return [g for g in range(m.ngeom)
-            if m.geom_contype[g] and g not in feet_ids
-            and int(m.body_rootid[int(m.geom_bodyid[g])]) == 1]   # 只取机器人这棵树
-
-
-def min_clear(rig: G.Rig, pose_body, joints, gids) -> float:
-    """机器人非足端碰撞体 vs 梯级踏板的最小距离（<=LEG_CLEAR 视为搭在台阶上）。"""
-    G.set_pose(rig, rig.probe, pose_body, joints)
-    best = 1e9
-    for g in gids:
-        for plate in rig.plate_gids:
-            d = mujoco.mj_geomDistance(rig.model, rig.probe, g, plate, 2.0, None)
-            if d < best:
-                best = d
-    return float(best)
-
-
 def analyse(rig: G.Rig, feet: dict) -> dict:
     cands = D.enumerate_poses(rig, feet, pitch_lo=0.0, pitch_hi=PITCH_HI, ext_max=EXT_CAP,
                               xs=np.arange(0.28, 0.90, 0.02),
@@ -124,13 +101,7 @@ def analyse(rig: G.Rig, feet: dict) -> dict:
                               zs=np.arange(0.46, 1.06, 0.02))
     if not cands:
         return {"ok": False}
-    gids = self_gids(rig, G.foot_gids(rig))
-    kept = []
-    for c in cands:
-        c["leg_clear"] = min_clear(rig, c["body"], c["joints"], gids)
-        if c["leg_clear"] >= LEG_CLEAR:
-            kept.append(c)
-    cands = kept
+    cands = D.filter_clear(rig, cands, G.foot_gids(rig))
     if not cands:
         return {"ok": False, "why": "所有可行位姿都有腿搭在台阶上"}
     poly = [(feet[k][0], feet[k][1]) for k in G.LEGS]

@@ -61,6 +61,7 @@ OUT_PNG = ROOT / "experiments" / "b2" / "b2_diag_stance.png"
 EDGE = 0.010          # 足端离踏面边缘的余量
 PRELOAD = 0.003       # 足端预压
 EXT_MIN, EXT_MAX = 0.35, 0.94
+LEG_CLEAR = 0.030     # 除足端球外、机器人任何碰撞体离梯级的净空（PD 静置要沉 ~2.7 cm）
 
 
 def stance(rig: G.Rig) -> dict:
@@ -103,14 +104,47 @@ def inradius(poly) -> float:
     return best, best_pt
 
 
+def self_gids(rig: G.Rig, fg) -> list[int]:
+    """机器人身上真正会碰撞的 geom，去掉四只足端球（它们本来就要压在踏面上）。"""
+    feet_ids = set(fg.values())
+    m = rig.model
+    return [g for g in range(m.ngeom)
+            if m.geom_contype[g] and g not in feet_ids
+            and int(m.body_rootid[int(m.geom_bodyid[g])]) == 1]
+
+
+def min_clear(rig: G.Rig, pose_body, joints, gids) -> float:
+    """机器人非足端碰撞体 vs 梯级踏板的最小距离（<=LEG_CLEAR 视为搭在台阶上）。"""
+    G.set_pose(rig, rig.probe, pose_body, joints)
+    best = 1e9
+    for g in gids:
+        for plate in rig.plate_gids:
+            d = mujoco.mj_geomDistance(rig.model, rig.probe, g, plate, 2.0, None)
+            if d < best:
+                best = d
+    return float(best)
+
+
+def filter_clear(rig: G.Rig, cands: list, fg, clear: float = LEG_CLEAR) -> list:
+    """按"非足端碰撞体离梯级"过滤候选位姿，并把净空记进候选里。"""
+    gids = self_gids(rig, fg)
+    out = []
+    for c in cands:
+        c["leg_clear"] = min_clear(rig, c["body"], c["joints"], gids)
+        if c["leg_clear"] >= clear:
+            out.append(c)
+    return out
+
+
 def enumerate_poses(rig: G.Rig, feet, pitch_lo: float = -6.0, pitch_hi: float = 25.0,
-                    ext_max: float = EXT_MAX, xs=None, ys=None, zs=None) -> list[dict]:
+                    ext_max: float = EXT_MAX, xs=None, ys=None, zs=None,
+                    support=None) -> list[dict]:
     """枚举所有满足硬约束的机身位姿，返回候选列表（不同目标函数各自去挑）。
 
     硬约束：四足 IK 可达、伸展 ∈ [EXT_MIN, ext_max]、机身碰撞包络离梯级 ≥ BODY_CLEAR、
     重心投影落在四足支撑多边形内。这里不排序、不挑"最好"，只把可行集交出去。
     """
-    poly = [(feet[k][0], feet[k][1]) for k in G.LEGS]
+    poly = [(feet[k][0], feet[k][1]) for k in (support if support is not None else G.LEGS)]
     xs = np.arange(0.26, 0.54, 0.02) if xs is None else xs
     ys = np.arange(G.BODY_Y - 0.12, G.BODY_Y + 0.121, 0.02) if ys is None else ys
     zs = np.arange(0.46, 0.82, 0.02) if zs is None else zs
