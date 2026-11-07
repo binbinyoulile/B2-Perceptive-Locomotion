@@ -62,11 +62,13 @@ def main() -> int:
         last = [0.0]
 
         def sync():
-            now = time.perf_counter()
-            if now - last[0] >= 1.0 / 50.0:
-                viewer.cam.lookat[:] = (float(data.qpos[0]), C.BODY_Y, float(data.qpos[2]) - 0.15)
-                viewer.sync()
-                last[0] = now
+            # 真实时间节流：每控制步补足 20 ms，否则一会儿就播完了
+            rest = 1.0 / 50.0 - (time.perf_counter() - last[0])
+            if rest > 0:
+                time.sleep(rest)
+            viewer.cam.lookat[:] = (float(data.qpos[0]), C.BODY_Y, float(data.qpos[2]) - 0.15)
+            viewer.sync()
+            last[0] = time.perf_counter()
 
         rb.build(tuple(body), feet)
         rb.hold(rb.targets(tuple(body), feet), 1.2, sync)
@@ -92,7 +94,11 @@ def main() -> int:
             print(f"  {name}: z {data.qpos[2]:.3f}")
             if not viewer.is_running() or data.qpos[2] < 0.20:
                 break
-        time.sleep(0.5)
+        # 播完不关窗：停在最后一帧，鼠标仍可旋转/缩放，点右上角 X 才退出
+        print("动作结束——窗口保持打开（鼠标可拖拽视角），点 X 关闭。")
+        while viewer.is_running():
+            viewer.sync()
+            time.sleep(0.02)
     return 0
 
 

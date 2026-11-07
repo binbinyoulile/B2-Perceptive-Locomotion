@@ -758,9 +758,12 @@ def fmt(rec) -> list[str]:
 
 def main() -> int:
     argv = sys.argv[1:]
+    if "--check" in argv:
+        return check_env()
     if "--view" in argv:
         key = argv[argv.index("--robot") + 1] if "--robot" in argv else "b2"
-        return view(key, straddle="--straddle" in argv)
+        mode = "both" if "--both" in argv else ("straddle" if "--straddle" in argv else "crawl")
+        return view(key, mode)
 
     lines: list[str] = []
 
@@ -865,99 +868,208 @@ def main() -> int:
     return 0
 
 
-# ---------------------------------------------------------------- 3D 演示
-def view_straddle(rig: Rig, fg) -> int:
-    """演示 B2 真正站得住的姿态：错位（前足二级、后足一级）+ 抬一条前足，全程 PD 实测。"""
-    import mujoco.viewer
+# ---------------------------------------------------------------- 环境核对
+def check_env() -> int:
+    """核对仿真基础设定：钢梯几何（从 model 反算）、摩擦（geom + 实际接触）、场景引用。"""
+    rig = load_rig("b2")
+    m = rig.model
+    fg = foot_gids(rig)
+    lines: list[str] = []
 
+    def say(t: str = "") -> None:
+        lines.append(t)
+
+    say("=" * 92)
+    say("仿真基础设定核对（尺寸 / 摩擦 / 场景引用）")
+    say("=" * 92)
+
+    def name_of(g: int) -> str:
+        return mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_GEOM, g) or f"geom{g}"
+
+    names = [name_of(g) for g in range(m.ngeom)]
+    say(f"  场景：simulations/mujoco/{rig.key}_stairs_static/scene.xml"
+        f"（<include> ../steel_stair/stair_bodies.xml）")
+    say("  同一份 stair_bodies.xml 被 go2 / b2 / as2 三个场景 include，改一次三机同步。")
+    say()
+    say("  [尺寸] 从编译后的 model 反算（不读 XML 文本，直接看 MuJoCo 里到底是什么）：")
+    say(f"    {'踏面名':<12}{'x 前缘':>9}{'x 后缘':>9}{'深 m':>8}{'宽 m':>8}{'顶 z m':>9}")
+    treads = [g for g in range(m.ngeom) if name_of(g).startswith("up_step_")]
+    treads.sort(key=lambda g: float(m.geom_pos[g][0]))
+    prev = None
+    rises: list[float] = []
+    for g in treads:
+        c, h = m.geom_pos[g], m.geom_size[g]
+        depth, width, top = 2 * float(h[0]), 2 * float(h[1]), float(c[2] + h[2])
+        say(f"    {name_of(g):<12}{c[0]-h[0]:9.4f}{c[0]+h[0]:9.4f}{depth:8.4f}{width:8.4f}{top:9.4f}")
+        if prev is not None:
+            rises.append(top - prev)
+        prev = top
+    plat = [g for g in range(m.ngeom) if name_of(g) == "platform"]
+    if plat:
+        c, h = m.geom_pos[plat[0]], m.geom_size[plat[0]]
+        say(f"    {'platform':<12}{c[0]-h[0]:9.4f}{c[0]+h[0]:9.4f}"
+            f"{2*h[0]:8.4f}{2*h[1]:8.4f}{c[2]+h[2]:9.4f}")
+    d0, w0 = 2 * float(m.geom_size[treads[0]][0]), 2 * float(m.geom_size[treads[0]][1])
+    say(f"    → 级高 {np.mean(rises):.4f} m（逐级 {', '.join(f'{r:.4f}' for r in rises)}）"
+        f"，踏面深 {d0:.4f} m，宽 {w0:.4f} m，共 {len(treads)} 级 + 平台")
+    ok_dim = (abs(np.mean(rises) - 0.197) < 1e-3 and abs(d0 - 0.272) < 1e-3 and abs(w0 - 0.81) < 1e-3)
+    say(f"    → 与现场实测 0.197 / 0.272 / 0.81 对比：{'一致' if ok_dim else '不一致！'}")
+    say()
+
+    say("  [摩擦] 踏面 / 地面 geom 的 friction 属性：")
+    for g in treads + plat:
+        say(f"    {name_of(g):<12}{np.array2string(m.geom_friction[g], precision=2)}")
+    zg = [g for g in range(m.ngeom) if name_of(g) == "floor"]
+    if zg:
+        say(f"    {'floor':<12}{np.array2string(m.geom_friction[zg[0]], precision=2)}")
+    foot_mu = min(float(m.geom_friction[fg[l]][0]) for l in LEGS)
+    say(f"    足端 geom 自带 μ={foot_mu:.2f}；MuJoCo 取两者逐元素最大值 → 实际接触 μ="
+        f"{max(foot_mu, float(m.geom_friction[treads[0]][0])):.2f}")
+    say()
+
+    # 实际接触核对：B2 四足压在一级踏面，跑 0.2 s 后直接读 data.contact 里生效的摩擦
+    feet = stance_feet(rig, 0)
+    pose = solve_pose(rig, feet, LEGS, center_y=BODY_Y)
+    say("  [实际接触] B2 四足压在一级踏面 0.2 s，读接触对里 MuJoCo 真正用的摩擦：")
+    if pose is None:
+        say("    姿态求解失败，跳过")
+    else:
+        data = rig.data
+        set_pose(rig, data, pose[:4], pose[4])
+        lp = Loop(rig)
+        for _ in range(10):
+            lp.step({leg: pose[4][leg] for leg in LEGS})
+        leg_of = {g: f"{leg} 足端" for leg, g in fg.items()}
+        seen: dict[tuple[str, str], np.ndarray] = {}
+        for i in range(data.ncon):
+            c = data.contact[i]
+            b1 = leg_of.get(int(c.geom1), name_of(int(c.geom1)))
+            b2 = name_of(int(c.geom2))
+            seen.setdefault((b1, b2), np.array(c.friction, dtype=float))
+        if not seen:
+            say("    0.2 s 内没有接触（足端还悬着）")
+        for (b1, b2), mu in seen.items():
+            say(f"    {b1:<12} x {b2:<12} μ 滑动 {mu[0]:.2f} / 扭转 {mu[1]:.2f} / 滚动 {mu[2]:.2f}")
+        say("    （来自 data.contact[i].friction，就是接触求解器用的值，不是猜的）")
+    say()
+    say("  [结论] 尺寸 " + ("OK" if ok_dim else "不对") + f"，摩擦 μ={float(m.geom_friction[treads[0]][0]):.2f}，"
+        f"场景引用统一 stair_bodies.xml。")
+
+    text = "\n".join(lines)
+    out = ROOT / "experiments" / "feasibility" / "stair_env_check.txt"
+    out.write_text(text + "\n", encoding="utf-8")
+    print(text)
+    print("WROTE", out)
+    return 0 if ok_dim else 1
+
+
+# ---------------------------------------------------------------- 3D 演示
+def pacer(viewer, on_frame=None):
+    """返回一个 sync 回调：补足 20 ms（50 Hz 真实时间），并可选地在每帧改相机。"""
+    last = [0.0]
+
+    def sync() -> None:
+        rest = 1.0 / 50.0 - (time.perf_counter() - last[0])
+        if rest > 0:
+            time.sleep(rest)
+        if on_frame is not None:
+            on_frame()
+        viewer.sync()
+        last[0] = time.perf_counter()
+
+    return sync
+
+
+def hold_open(viewer) -> None:
+    """动作播完不关窗：停在最后一帧，等用户自己关（期间鼠标拖拽/滚轮照常生效）。"""
+    print("  动作结束——窗口保持打开，可用鼠标旋转/缩放/平移，点右上角 X 关闭。")
+    while viewer.is_running():
+        viewer.sync()
+        time.sleep(0.02)
+
+
+def straddle_setup(rig: Rig):
+    """错位站姿（前足二级/后足一级）+ 再抬一条前足的两个位姿。"""
     f0, f1 = stance_feet(rig, 0), stance_feet(rig, 1)
     cross = dict(f0)
     cross["FL"], cross["FR"] = f1["FL"], f1["FR"]
     pose = solve_pose(rig, cross, LEGS, ext_max=0.98)
     if pose is None:
-        print(f"{LABEL[rig.key]}：错位站姿无可行解")
-        return 1
+        return None
     lifted = dict(cross)
     lifted["FL"] = (cross["FL"][0], cross["FL"][1], cross["FL"][2] + 0.15)
     pose2 = solve_pose(rig, lifted, tuple(l for l in LEGS if l != "FL"),
                        prev=pose[:4], ext_max=0.98)
-    print(f"{LABEL[rig.key]}：错位站姿（前足二级 / 后足一级），最大伸展 {max(pose[5].values())*100:.0f}%，"
-          f"重心余量 {pose[7]*1000:.0f} mm")
-    print("  先保持 1.5 s，再把左前足抬 15 cm 保持 2 s；关窗退出。")
+    return cross, pose, lifted, pose2
 
-    model, data = rig.model, rig.data
+
+def play_straddle(rig: Rig, viewer, sync) -> None:
+    """错位站姿 → 抬一条前足，全程 PD 实测。"""
+    setup = straddle_setup(rig)
+    if setup is None:
+        print("  错位站姿无可行解，跳过")
+        return
+    cross, pose, lifted, pose2 = setup
+    data = rig.data
+    print(f"  错位站姿：伸展 {max(pose[5].values())*100:.0f}%，重心余量 {pose[7]*1000:.0f} mm"
+          f"｜保持 1.5 s 后抬左前足 15 cm 保持 2 s")
     joints, _ = legs_ik(rig, pose[:4], cross)
     set_pose(rig, data, pose[:4], joints)
     lp = Loop(rig)
 
-    with mujoco.viewer.launch_passive(model, data, show_left_ui=False, show_right_ui=False) as viewer:
-        viewer.opt.geomgroup[3] = 1      # 碰撞体在组 3，默认不显示；不打开只能看到地板和足端
-        viewer.cam.lookat[:] = (float(data.qpos[0]), BODY_Y, float(data.qpos[2]) - 0.10)
-        viewer.cam.distance = 2.2
-        viewer.cam.azimuth = 28.0
-        viewer.cam.elevation = -12.0
-        last = [0.0]
+    def drive(feet, body, seconds: float) -> None:
+        jj, _ = legs_ik(rig, body, feet)
+        for _ in range(int(round(seconds * 50.0))):
+            lp.step(jj)
+            sync()
 
-        def sync():
-            now = time.perf_counter()
-            if now - last[0] >= 1.0 / 50.0:
-                viewer.cam.lookat[:] = (float(data.qpos[0]), BODY_Y, float(data.qpos[2]) - 0.10)
-                viewer.sync()
-                last[0] = now
-
-        def drive(feet, body, seconds: float) -> None:
-            jj, _ = legs_ik(rig, body, feet)
-            for _ in range(int(round(seconds * 50.0))):
-                lp.step(jj)
-                sync()
-
-        drive(cross, pose[:4], 1.5)
-        print(f"  保持后：z {data.qpos[2]:.3f}，倾角 {tilt_of(data):.1f}°")
-        drive(lifted, pose2[:4] if pose2 else pose[:4], 2.0)
-        print(f"  抬足后：z {data.qpos[2]:.3f}，倾角 {tilt_of(data):.1f}°")
-        time.sleep(0.5)
-    return 0
+    drive(cross, pose[:4], 1.5)
+    print(f"    保持后：z {data.qpos[2]:.3f}，倾角 {tilt_of(data):.1f}°")
+    drive(lifted, pose2[:4] if pose2 is not None else pose[:4], 2.0)
+    print(f"    抬足后：z {data.qpos[2]:.3f}，倾角 {tilt_of(data):.1f}°"
+          f"（{'没塌' if data.qpos[2] > pose[2] - 0.08 else '塌了'}）")
 
 
-def view(key: str, straddle: bool = False) -> int:
+def view(key: str, mode: str = "crawl") -> int:
+    """mode: crawl=同踩+四拍 / straddle=错位站姿 / both=先爬后站，播完都停住不关窗。"""
     import mujoco.viewer
 
     rig = load_rig(key)
     fg = foot_gids(rig)
-    if straddle:
-        return view_straddle(rig, fg)
-    segs, notes = build_plan(rig, steps=2)
-    print(f"{LABEL[key]}：0.197/0.272 钢梯，四足同踩 + 挪重心 + 四拍（FL/RR/FR/RL），目标爬 2 级 0.394 m")
-    if segs is None:
-        for n in notes:
-            print("  ·", n)
-        return 1
-    for n in notes:
-        print("  ·", n)
-    print("关窗退出。")
-
     model, data = rig.model, rig.data
+    print(f"{LABEL[key]}：0.197/0.272 钢梯（μ=1.0）")
 
     with mujoco.viewer.launch_passive(model, data, show_left_ui=False,
                                       show_right_ui=False) as viewer:
         viewer.opt.geomgroup[3] = 1  # 碰撞体（组 3）默认不显示，不打开只能看到地板和足端
         viewer.cam.lookat[:] = (0.60, BODY_Y, 0.42)
         viewer.cam.distance = 2.6
-        viewer.cam.azimuth = 24.0
+        viewer.cam.azimuth = 24.0 if mode == "crawl" else 104.0
         viewer.cam.elevation = -15.0
-        last = [0.0]
+        def follow():
+            viewer.cam.lookat[:] = (float(data.qpos[0]) + 0.05, BODY_Y,
+                                    float(data.qpos[2]) - 0.20)
 
-        def sync():
-            now = time.perf_counter()
-            if now - last[0] >= 1.0 / 50.0:
-                viewer.cam.lookat[:] = (float(data.qpos[0]) + 0.05, BODY_Y, float(data.qpos[2]) - 0.20)
-                viewer.sync()
-                last[0] = now
+        sync = pacer(viewer, on_frame=follow)
 
-        res = run_plan(rig, segs, fg, sync=sync)
-        print(f"  结果：机身 x {res['x']:+.3f} z {res['z']:.3f}，"
-              f"{'在 ' + res['failed_at'] + ' 失稳' if res['fell'] else '走完'}")
-        time.sleep(0.5)
+        if mode in ("crawl", "both"):
+            segs, notes = build_plan(rig, steps=2)
+            print(f"  【同踩 + 挪重心 + 四拍】目标爬 2 级 0.394 m"
+                  f"（4 拍 × 2 级，先挪重心再抬脚）")
+            if segs is None:
+                for n in notes:
+                    print("   ·", n)
+            else:
+                res = run_plan(rig, segs, fg, sync=sync)
+                print(f"  同踩+四拍结果：机身 x {res['x']:+.3f} z {res['z']:.3f}，"
+                      f"{'在 ' + str(res['failed_at']) + ' 失稳' if res['fell'] else '走完'}")
+            if mode == "both" and viewer.is_running():
+                time.sleep(0.8)
+
+        if mode in ("straddle", "both") and viewer.is_running():
+            play_straddle(rig, viewer, sync)
+
+        hold_open(viewer)
     return 0
 
 

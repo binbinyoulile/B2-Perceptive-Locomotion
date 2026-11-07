@@ -64,7 +64,8 @@ def shots(key: str) -> list[Image.Image]:
         renderer.update_scene(data, camera=cam, scene_option=opt)
         img = Image.fromarray(renderer.render())
         out.append(img)
-        img.save(FRAMES / f"{key}_{len(out)}_{tag}.png")
+        order = {"start": 1, "foot_up": 2, "fall": 3, "end": 4}[tag]
+        img.save(FRAMES / f"{key}_{order}_{tag}.png")
 
     def hook(seg, u: float) -> None:
         if not state["start"] and seg.name == "稳住":
@@ -72,10 +73,11 @@ def shots(key: str) -> list[Image.Image]:
         if not state["start"] and seg.name != "稳住":
             state["start"] = True
             grab("start")
-        if not state["peak"] and seg.lift == state["lift"] and u > 0.97:
+        # 顺序必须固定：先"脚上去"，再"失稳"，否则拼图列标题会对不上
+        if not state["peak"] and seg.lift == state["lift"] and u >= 0.85:
             state["peak"] = True
             grab("foot_up")
-        if not state["fall"] and G.tilt_of(data) > 28.0:
+        if state["peak"] and not state["fall"] and G.tilt_of(data) > 28.0:
             state["fall"] = True
             grab("fall")
 
