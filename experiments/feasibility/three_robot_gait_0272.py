@@ -536,7 +536,7 @@ def hold(rig: Rig, fg, feet, body, seconds: float = 1.5):
             "ext": ext, "body": body}
 
 
-def run_plan(rig: Rig, segs: list[Seg], fg, sync=None):
+def run_plan(rig: Rig, segs: list[Seg], fg, sync=None, hook=None):
     """按计划推进；一旦跌落就停在出错的那一段（继续推只会得到一堆地板数据）。"""
     model, data = rig.model, rig.data
     joints0, _ = legs_ik(rig, segs[0].body_a, segs[0].feet_a)
@@ -574,6 +574,8 @@ def run_plan(rig: Rig, segs: list[Seg], fg, sync=None):
                 break
             lp.step(joints)
             seg_peak = max(seg_peak, lp.last)
+            if hook is not None:
+                hook(seg, u)
             if sync is not None:
                 sync()
             max_tilt = max(max_tilt, tilt_of(data))

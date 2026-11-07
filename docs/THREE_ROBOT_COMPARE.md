@@ -30,6 +30,11 @@
 「最紧位姿」= 三只足已在上一级、最后一只足还挂在下一级的那一拍（四拍里必然出现）。
 这一拍的伸展需求是整个爬升的上限：B2 93%、Go2 95%、AS2 97%。
 
+![三机同踩+四拍的三帧对照](<../experiments/feasibility/three_robot_gait_0272.png>)
+
+> 每行一款机型：起步踩在一级 → 左前足落到二级 → 失稳那一刻。
+> B2 那一行能直接看出它是**后仰**（机头抬高、尾部落下去），AS2 最后一张是整机塌在梯级上。
+
 ## 三、静态能力（PD 保持 1.5 s）
 
 | 机型 | 同踩一级 | 错位（前足二级/后足一级） | 错位下抬一条前足 15 cm |
@@ -112,7 +117,13 @@ cd D:\桌面\机器狗; D:\Python313\python.exe .\experiments\feasibility\three_
 cd D:\桌面\机器狗; D:\Python313\python.exe .\experiments\feasibility\three_robot_gait_0272.py --robot b2 --view --straddle
 ```
 
-产物：`experiments/feasibility/three_robot_gait_0272.txt` / `.json`（逐拍数据）。
+```powershell
+# 重画上面的对照图（离屏渲染，约 30 s）
+cd D:\桌面\机器狗; D:\Python313\python.exe .\experiments\feasibility\three_robot_gait_0272_frames.py
+```
+
+产物：`experiments/feasibility/three_robot_gait_0272.txt` / `.json`（逐拍数据）、
+`.png`（三帧对照图）、`frames/`（单帧）。
 
 ## 八、已知限制
 
