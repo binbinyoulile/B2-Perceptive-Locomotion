@@ -469,6 +469,13 @@ def pitch_of(data) -> float:
     return -math.asin(max(-1.0, min(1.0, 2.0 * (q[0] * q[2] - q[3] * q[1]))))
 
 
+def yaw_of(data) -> float:
+    """机身偏航角（弧度）。规划只管 pitch，yaw 没有反馈，靠这个字段看它漂了多少。"""
+    q = data.qpos[3:7]
+    return math.atan2(2.0 * (q[0] * q[1] + q[2] * q[3]),
+                      1.0 - 2.0 * (q[1] ** 2 + q[2] ** 2))
+
+
 def tilt_of(data) -> float:
     """最大倾角（度）。"""
     q = data.qpos[3:7]
@@ -611,7 +618,9 @@ def run_plan(rig: Rig, segs: list[Seg], fg, sync=None, hook=None, body_servo: fl
                           "slip_mm": max(float(np.linalg.norm(
                               data.geom_xpos[fg[l]][:2] - iu[l])) * 1000 for l in LEGS if l != seg.lift),
                           "tilt": max_tilt, "peak": seg_peak, "lift": seg_lift,
-                          "feet_z": {l: float(data.geom_xpos[fg[l]][2]) for l in LEGS}})
+                          "y": float(data.qpos[1]), "yaw": math.degrees(yaw_of(data)),
+                          "feet_z": {l: float(data.geom_xpos[fg[l]][2]) for l in LEGS},
+                          "feet_x": {l: float(data.geom_xpos[fg[l]][0]) for l in LEGS}})
     worst = max(rig.act.items(), key=lambda kv: lp.peak[kv[1]])
     return {
         "x": float(data.qpos[0]), "z": float(data.qpos[2]),

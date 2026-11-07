@@ -97,17 +97,61 @@ PLAT_ADJ = 0.520         # 两只前足都上平台后，在平地上各向前�
 #   （实测第 12 步就是绕 FL–RR 对角线翻下去）。前足在平地上前移把跨距撑到 0.40，
 #   最后一拍的余量从 72 抬到 114 mm —— 而且这一步完全在平台上，不影响已经跑通的爬梯段。
 
+# ---- 平地起步 ----
+GROUND_X, GROUND_Z = -0.115, 0.550   # 平地站姿的机身位置（离楼梯口 0.33 m，正常站高）
+GROUND_FRONT, GROUND_REAR = 0.30, -0.185   # 平地站姿的前/后足离机身中心多远的 x
+#   前足落在 0.185：正好在楼梯鼻端（0.2166）之外，足端半径 0.032 还留 3 cm。
+#   后足不放在"对称"的 -0.357：那样后足到第 1 级要走 0.7 m，得拆成 3 步；
+#   收一点（后髋前 0.16 m）看着仍是正常站姿，后足两步就能上到位。
+
+
+def ground_stance(rig: G.Rig):
+    """平地正常站姿：四足都在地面、俯仰 0、机身 0.55 m。（这是"狗先正常站在那儿"的那一帧。）"""
+    feet = {}
+    for leg in G.LEGS:
+        dx = GROUND_FRONT if leg in ("FL", "FR") else GROUND_REAR
+        feet[leg] = (GROUND_X + dx, G.BODY_Y + rig.foot_y[leg], rig.r + PRELOAD)
+    return feet, (GROUND_X, G.BODY_Y, GROUND_Z, 0.0)
+
+
+def entry_spec(rig: G.Rig) -> list[tuple[str, tuple, str]]:
+    """平地站姿 → 标准状态 S0（FL2/FR1/RR1/RL0）的 7 步。
+
+    按用户提的顺序：先把两只前足送上第 1 级（再把左前足抬到第 2 级），
+    然后把两只后足在平地上往前挪、右后足上第 1 级，最后左后足挪到楼梯口那个位置。
+    走完 7 步四足落点与 S0 逐足相同，后面直接接已经验证过的 14 步爬梯计划。
+    """
+    def g(leg: str, x: float):
+        return (x, G.BODY_Y + rig.foot_y[leg], rig.r + PRELOAD)
+
+    return [
+        # 顺序按两条硬规矩排：
+        # ① 任何时刻同一级上最多两只脚（三只脚挤在 0.272 m 的踏面上，B2 髋距 0.657 撑不住）；
+        # ② 抬起某条腿时剩下三足的三角形要够宽 —— 两只前足停在第 1 级同一 x 时是薄三角，所以
+        #    左后足在"两前足刚上第 1 级、机身还在后面"时挪到地面位置，那时三角形最宽。
+        ("FR", foot_target(rig, "FR", 1), "FR 上第1级"),
+        ("FL", foot_target(rig, "FL", 1), "FL 上第1级"),
+        ("RL", g("RL", TREAD_REAR0 - 0.15), "RL 平地到位"),
+        ("RR", g("RR", 0.000), "RR 平地前移"),
+        ("FL", foot_target(rig, "FL", 2), "FL 上第2级"),
+        ("RR", foot_target(rig, "RR", 1), "RR 上第1级"),
+    ]
+
 
 def edge_x(level: int) -> float:
     return TREAD_REAR0 + TREAD_DEPTH * (level - 1)
 
 
 def foot_target(rig: G.Rig, leg: str, level: int):
-    """某条腿在第 level 级上的落点。第 4 级是 2 m 深平台：前足往里踩深一点，
-    把"前后足跨距"撑开（只有 0.19 m 时最后一拍的支撑三角形内切圆只有 72 mm，实测就是这一步失稳）。"""
+    """某条腿在第 level 级上的落点。
+
+    level ≤ 0 都算地面：地面就是一块"往后退的假踏面"，每退一级减 0.272 m
+    （这样"从平地起步"可以按同一条循环往上数，不需要单独写一套落地逻辑）。
+    第 4 级是 2 m 深平台：后足不能贴边（贴边落地会被拖动滑出去），前足往里踩深一点。
+    """
     y = G.BODY_Y + rig.foot_y[leg]
-    if level == 0:
-        return (TREAD_REAR0 - 0.15, y, rig.r + PRELOAD)
+    if level <= 0:
+        return (TREAD_REAR0 - 0.15 + TREAD_DEPTH * level, y, rig.r + PRELOAD)
     if level == TOP_LEVEL:
         x = edge_x(level) + (PLAT_FRONT if leg in ("FL", "FR") else PLAT_REAR)
         return (x, y, LEVEL_TOP[level] + rig.r + PRELOAD)
@@ -117,14 +161,17 @@ def foot_target(rig: G.Rig, leg: str, level: int):
     return (x, y, LEVEL_TOP[level] + rig.r + PRELOAD)
 
 
-def start_levels() -> dict:
-    return {"FL": 2, "FR": 1, "RR": 1, "RL": 0}
+def start_levels(base: int = 0) -> dict:
+    """标准状态的基准：FL = base+2 / FR、RR = base+1 / RL = base。
+    base=0 就是验证过的爬梯起点（FL2/FR1/RR1/RL0）；base=-1 是"平地起步"那一态
+    （FL 已在第 1 级、其余三足在平地），走完一个循环正好回到 base=0。"""
+    return {"FL": 2 + base, "FR": 1 + base, "RR": 1 + base, "RL": 0 + base}
 
 
-def steps_of_cycle(c: int) -> list[tuple[str, int, int]]:
+def steps_of_cycle(c: int, base: int = 0) -> list[tuple[str, int, int]]:
     """第 c 个循环的四步：(腿, 从第几级, 到第几级)。"""
-    return [("FR", 1 + c, 2 + c), ("RL", 0 + c, 1 + c),
-            ("FL", 2 + c, 3 + c), ("RR", 1 + c, 2 + c)]
+    return [("FR", 1 + base + c, 2 + base + c), ("RL", 0 + base + c, 1 + base + c),
+            ("FL", 2 + base + c, 3 + base + c), ("RR", 1 + base + c, 2 + base + c)]
 
 
 def pick(cands, prev=None, tol: float = 0.030):
@@ -143,42 +190,67 @@ def pick(cands, prev=None, tol: float = 0.030):
                                    + 0.35 * abs(c["body"][3] - prev[3])))
 
 
-def solve(rig: G.Rig, fg, feet, support, prev=None, tol: float = 0.030):
+def solve(rig: G.Rig, fg, feet, support, prev=None, tol: float = 0.030,
+          pitch_hi: float = PITCH_HI, win: float | None = None):
     """细网格搜索（2 cm / 3°），窗口绕上一位姿。
     粗网格（5 cm）快 5 倍，但搜出的位姿动力学上走不通，别换；窗口只缩"搜索范围"，不改分辨率。
+    pitch_hi=0 把入口段压成"平地走路"：不压的话规划器会为了多要点余量把机身一路抬到 30°。
+    win 是显式给的小窗口（入口段用）：让机身只能在小范围里挑（尤其横向偏重心），
+    整体前进量由给定的锚点定，规划器不会自己乱跑。
     """
+    wx = WIN_X if win is None else win
+    wz = WIN_Z if win is None else win
     if prev is None:
-        xs = np.arange(0.20, 0.96, 0.02)
-        zs = np.arange(0.46, 1.12, 0.02)
+        xs = np.arange(-0.12, 0.96, 0.02)      # 平地起步时机身会退到楼梯口之前（x<0.2）
+        zs = np.arange(0.56, 1.12, 0.02)       # 也不要从 0.46 起：太低了腿是折着的，
+        #   B2 折着腿撑不住 69 kg，PD 会沉 4–7 cm、机身直接蹭到梯级（实测 2017 N 接触）。
     else:
-        xs = np.arange(max(0.10, prev[0] - WIN_X), prev[0] + WIN_X + 1e-9, 0.02)
-        zs = np.arange(max(0.40, prev[2] - WIN_Z), prev[2] + WIN_Z + 1e-9, 0.02)
-    cands = D.enumerate_poses(rig, feet, pitch_lo=0.0, pitch_hi=PITCH_HI, ext_max=EXT_CAP,
+        # 注意别在这里夹一个"下界 -0.20"：入口段锚点会退到 -0.35，一夹就变成空区间（xs 为空 → 静默 0 候选）
+        xs = np.arange(prev[0] - wx, prev[0] + wx + 1e-9, 0.02)
+        zs = np.arange(max(0.40, prev[2] - wz), prev[2] + wz + 1e-9, 0.02)
+    cands = D.enumerate_poses(rig, feet, pitch_lo=0.0, pitch_hi=pitch_hi, ext_max=EXT_CAP,
                               xs=xs, ys=np.arange(G.BODY_Y - 0.10, G.BODY_Y + 0.101, 0.02),
                               zs=zs, support=support)
     cands = D.filter_clear(rig, cands, fg)
     if not cands:
+        if len(xs) == 0 or len(zs) == 0:      # 空搜索区间不是"不可行"，是参数写错了，必须吵出来
+            raise ValueError(f"搜索区间为空：xs {len(xs)} 个、zs {len(zs)} 个（prev={prev}）")
         return None
     best = pick(cands, prev, tol)
     # 命中窗口边界 → 说明真正的解可能在窗口外（下一步会因此解不出来），必须报警而不是静默
     best["win_hit"] = bool(prev is not None and (
-        abs(best["body"][0] - prev[0]) > WIN_X - 0.021 or
-        abs(best["body"][2] - prev[2]) > WIN_Z - 0.021))
+        abs(best["body"][0] - prev[0]) > wx - 0.021 or
+        abs(best["body"][2] - prev[2]) > wz - 0.021))
     return best
 
 
-def build(rig: G.Rig, fg, cycles: int):
-    """生成整条轨迹 + 每步的计划信息。返回 (segs, steps, notes, 末态 feet)。"""
-    levels = start_levels()
-    feet = {leg: foot_target(rig, leg, levels[leg]) for leg in G.LEGS}
-    body = solve(rig, fg, feet, G.LEGS)
+def build(rig: G.Rig, fg, cycles: int, base: int = 0, entry: bool = False):
+    """生成整条轨迹 + 每步的计划信息。返回 (segs, steps, notes, 末态 feet)。
+
+    entry=True：从平地正常站姿起步，先走 7 步进入标准状态 S0，再接 base=0 的爬梯计划。
+    entry=False：直接从 S0（楼梯上的错位姿态）起步 —— 就是之前验证过的那 14 步。
+    """
+    if entry:
+        feet, gbody = ground_stance(rig)
+        joints, ext = G.legs_ik(rig, gbody, feet)
+        if joints is None:
+            return None, [], ["平地站姿 IK 不可达"], None
+        com, gap = G.pose_metrics(rig, gbody, joints)
+        poly = [(feet[k][0], feet[k][1]) for k in G.LEGS]
+        body = {"body": gbody, "joints": joints, "ext": ext, "max_ext": max(ext.values()),
+                "com": com, "margin": G.margin_in_poly(com, poly), "gap": gap}
+    else:
+        levels0 = start_levels(base)
+        feet = {leg: foot_target(rig, leg, levels0[leg]) for leg in G.LEGS}
+        body = solve(rig, fg, feet, G.LEGS)
     if body is None:
         return None, [], ["起步姿态无可行解"], None
+    levels = start_levels(base)
     segs = [G.Seg("起步稳住", 0.6, body["body"], body["body"], dict(feet), dict(feet))]
     steps, notes = [], []
     cur = body
 
-    def solve_pair(new_feet: dict, support3: tuple):
+    def solve_pair(new_feet: dict, support3: tuple, pitch_hi: float = PITCH_HI):
         """解"抬腿位姿"和"挪重心位姿"这一对。
 
         抬腿那 1.5 s 是最危险的（只有三足撑着），所以取余量尽量大的位姿（tol=0.005）。
@@ -186,17 +258,22 @@ def build(rig: G.Rig, fg, cycles: int):
         实测只有 RL 从地面上一级那种（脚还在地上时腿已经到极限）才必须"边抬边升机身"，
         其余各步都能把机身运动放在四足着地的挪重心/落定两段完成。
         """
-        lifted = solve(rig, fg, new_feet, support3, prev=cur["body"], tol=0.005)
-        shifted = solve(rig, fg, feet, support3, prev=lifted["body"], tol=0.005) if lifted else None
+        lifted = solve(rig, fg, new_feet, support3, prev=cur["body"], tol=0.005,
+                       pitch_hi=pitch_hi)
+        shifted = (solve(rig, fg, feet, support3, prev=lifted["body"], tol=0.005,
+                         pitch_hi=pitch_hi) if lifted else None)
         if lifted is not None and shifted is not None and (
                 abs(lifted["body"][2] - shifted["body"][2]) > 0.030
                 or abs(lifted["body"][0] - shifted["body"][0]) > 0.040):
-            lifted = solve(rig, fg, new_feet, support3, prev=cur["body"], tol=0.030)
-            shifted = solve(rig, fg, feet, support3, prev=lifted["body"], tol=0.030) if lifted else None
+            lifted = solve(rig, fg, new_feet, support3, prev=cur["body"], tol=0.030,
+                           pitch_hi=pitch_hi)
+            shifted = (solve(rig, fg, feet, support3, prev=lifted["body"], tol=0.030,
+                             pitch_hi=pitch_hi) if lifted else None)
         return lifted, shifted
 
     def do_step(leg: str, new_feet: dict, label: str, cyc: int,
-                aggressive: bool = False) -> bool:
+                aggressive: bool = False, pitch_hi: float = PITCH_HI,
+                anchor=None, win: float | None = None, slow: float = 1.0) -> bool:
         """一次单腿移动：挪重心 → 抬腿 → 落定。失败时写 notes 并返回 False。
 
         aggressive=False 是爬梯段的既定做法（tol=0.03，贴着上一位姿）。
@@ -206,13 +283,15 @@ def build(rig: G.Rig, fg, cycles: int):
         """
         nonlocal cur
         support3 = tuple(l for l in G.LEGS if l != leg)
+        ref = cur["body"] if anchor is None else anchor      # 锚点：入口段用它指定"这一步机身该到哪"
         if aggressive:
-            lifted, shifted = solve_pair(new_feet, support3)
+            lifted, shifted = solve_pair(new_feet, support3, pitch_hi)
             tol_settle = 0.010
         else:
-            lifted = solve(rig, fg, new_feet, support3, prev=cur["body"], tol=0.030)
-            shifted = (solve(rig, fg, feet, support3, prev=lifted["body"], tol=0.030)
-                       if lifted else None)
+            lifted = solve(rig, fg, new_feet, support3, prev=ref, tol=0.030,
+                           pitch_hi=pitch_hi, win=win)
+            shifted = (solve(rig, fg, feet, support3, prev=ref, tol=0.030,
+                             pitch_hi=pitch_hi, win=win) if lifted else None)
             tol_settle = 0.030
         if lifted is None:
             notes.append(f"{label}（{leg}）：抬腿后无可行位姿")
@@ -224,15 +303,16 @@ def build(rig: G.Rig, fg, cycles: int):
             if cand.get("win_hit"):
                 notes.append(f"{label}（{leg}）：{tag}位姿落在搜索窗口边界")
         z_clear = max(feet[leg][2], new_feet[leg][2]) + rig.r + SWING_CLEAR
-        segs.append(G.Seg(f"挪重心{leg}", SHIFT_S, cur["body"], shifted["body"],
+        segs.append(G.Seg(f"挪重心{leg}", SHIFT_S * slow, cur["body"], shifted["body"],
                           dict(feet), dict(feet)))
-        segs.append(G.Seg(f"抬{leg}", LIFT_S, shifted["body"], lifted["body"],
+        segs.append(G.Seg(f"抬{leg}", LIFT_S * slow, shifted["body"], lifted["body"],
                           dict(feet), dict(new_feet), lift=leg, z_clear=z_clear))
-        settled = solve(rig, fg, new_feet, G.LEGS, prev=lifted["body"], tol=tol_settle)
+        settled = solve(rig, fg, new_feet, G.LEGS, prev=lifted["body"], tol=tol_settle,
+                        pitch_hi=pitch_hi, win=win)
         if settled is None:
             notes.append(f"{label}（{leg}）：落定无可行位姿")
             return False
-        segs.append(G.Seg(f"落定{leg}", SETTLE_S, lifted["body"], settled["body"],
+        segs.append(G.Seg(f"落定{leg}", SETTLE_S * slow, lifted["body"], settled["body"],
                           dict(new_feet), dict(new_feet)))
         steps.append({"cycle": cyc, "leg": leg, "label": label,
                       "d_shift": [shifted["body"][2] - cur["body"][2],
@@ -248,9 +328,38 @@ def build(rig: G.Rig, fg, cycles: int):
         cur = settled
         return True
 
+    # 平地起步：先走 7 步进入标准状态 S0（前两足先上第 1 级，再把后足挪到位）。
+    # 这一段把俯仰压到 0°：不压的话规划器会为了"多要点余量"把机身一路抬到 30°，
+    # 看起来是原地越抬越高，不是走路。
+    if entry:
+        spec = entry_spec(rig)
+        z0, z1 = gbody[2], 0.680
+        for i, (leg, target, label) in enumerate(spec, start=1):
+            t = i / len(spec)
+            # 锚点 = "抬起这条腿以后剩下三足"的三角形内切圆心（重心余量最大的那个点），
+            # h 按 0.55→0.68 线性升。手工试过线性推 x：FR 抬起时重心被留在支撑线外侧，
+            # 余量从 131 mm 掉到 45 mm；按内切圆心走才对。
+            ic = G.incenter3([(feet[l][0], feet[l][1]) for l in G.LEGS if l != leg])
+            anchor = (float(ic[0]), float(ic[1]), z0 + (z1 - z0) * t, 0.0)
+            nf = dict(feet)
+            nf[leg] = target
+            # 入口段比爬梯段慢 1.4 倍：机身低、腿折着，PD 跟踪误差比爬梯时大（实测下沉 20 mm vs 12 mm）
+            if not do_step(leg, nf, label, 0, pitch_hi=18.0, anchor=anchor, win=0.06, slow=1.4):
+                return segs, steps, notes, feet
+        # 进入 S0 后先把机身对齐到"验证过的那个位姿"，再站定：
+        # 入口最后一段是搜出来的 (0.367, 0.660, 9°)，与 S0 的 (0.360, 0.680, 3°) 差 2 cm/6°，
+        # 这个残差会在爬梯段被放大（实测第 16 步滑下台阶、RL 掉到地面，峰值力矩 141%）。
+        s0_body = (0.360, G.BODY_Y, 0.680, math.radians(3.0))
+        segs.append(G.Seg("进入后对齐S0", 3.0, cur["body"], s0_body, dict(feet), dict(feet)))
+        cur = {"body": s0_body}
+        # 自检：走完这 7 步，四足落点必须与 S0 逐足一致（否则后面的爬梯计划前提不成立）
+        dev = max(abs(feet[leg][0] - foot_target(rig, leg, levels[leg])[0]) for leg in G.LEGS)
+        notes.append(f"进入标准状态：四足落点与 S0 的最大偏差 {dev*1000:.1f} mm"
+                     + ("（已对齐，后续直接接爬梯计划）" if dev < 0.005 else "（偏差偏大，检查）"))
+
     adjusted = False
     for c in range(cycles):
-        for leg, lv_from, lv_to in steps_of_cycle(c):
+        for leg, lv_from, lv_to in steps_of_cycle(c, base):
             if lv_to > TOP_LEVEL:
                 notes.append(f"第 {c+1} 循环 {leg}：{lv_from}→{lv_to} 越过平台，跳过")
                 continue
@@ -283,8 +392,8 @@ def build(rig: G.Rig, fg, cycles: int):
 PLAN_JSON = ROOT / "experiments" / "b2" / "b2_follow_gait_plan.json"
 
 
-def save_plan(segs, steps, cycles: int) -> None:
-    data = {"cycles": cycles, "segments": [
+def save_plan(segs, steps, cycles: int, base: int = 0, entry: bool = False) -> None:
+    data = {"cycles": cycles, "base": base, "entry": entry, "segments": [
         {"name": s.name, "dur": s.dur, "body_a": list(s.body_a), "body_b": list(s.body_b),
          "feet_a": {k: list(v) for k, v in s.feet_a.items()},
          "feet_b": {k: list(v) for k, v in s.feet_b.items()},
@@ -292,12 +401,13 @@ def save_plan(segs, steps, cycles: int) -> None:
     PLAN_JSON.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
 
 
-def load_plan(cycles: int):
-    """读缓存的计划；没有或循环数对不上就返回 None。"""
+def load_plan(cycles: int, base: int = 0, entry: bool = False):
+    """读缓存的计划；没有、或循环数/基准/是否平地起步对不上就返回 None。"""
     if not PLAN_JSON.exists():
         return None
     data = json.loads(PLAN_JSON.read_text(encoding="utf-8"))
-    if data.get("cycles") != cycles:
+    if (data.get("cycles") != cycles or data.get("base", 0) != base
+            or bool(data.get("entry", False)) != entry):
         return None
     segs = [G.Seg(s["name"], s["dur"], tuple(s["body_a"]), tuple(s["body_b"]),
                   {k: tuple(v) for k, v in s["feet_a"].items()},
@@ -306,11 +416,15 @@ def load_plan(cycles: int):
     return segs
 
 
-def level_of(rig: G.Rig, z: float) -> str:
-    """把足心高度映射回"在哪一级"（容差 3 cm，否则返回 ?）。"""
+def level_of(rig: G.Rig, z: float, x: float) -> str:
+    """把足心位置映射回"在哪一级"（容差 3 cm，否则返回 ?）。
+    地面上的级别只能靠 x 分辨（level 0 与负级的高度一样），所以按落点规则反算。"""
+    if abs(z - (rig.r + PRELOAD)) < 0.030:
+        return str(int(round((x - (TREAD_REAR0 - 0.15)) / TREAD_DEPTH)))
     for lv, top in sorted(LEVEL_TOP.items()):
-        want = (rig.r + PRELOAD) if lv == 0 else (top + rig.r + PRELOAD)
-        if abs(z - want) < 0.030:
+        if lv == 0:
+            continue
+        if abs(z - (top + rig.r + PRELOAD)) < 0.030:
             return str(lv)
     return "?"
 
@@ -357,8 +471,13 @@ class ContactLog:
                 continue
             for g, other in ((g1, g2), (g2, g1)):
                 if g in self.robot and g not in self.feet and n > 5.0:
-                    key = (mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_GEOM, g),
-                           mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_GEOM, other))
+                    # geom 名可能为空（MJCF 里很多碰撞体没取名），补上所属 body 才看得懂是哪个部件
+                    def nm(x: int) -> str:
+                        gname = mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_GEOM, x)
+                        bname = mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_BODY,
+                                                  int(m.geom_bodyid[x]))
+                        return gname or f"{bname or '?'}#{x}"
+                    key = (nm(g), nm(other))
                     self.cur["foreign"][key] = max(self.cur["foreign"].get(key, 0.0), n)
         for leg in G.LEGS:
             self.cur["foot_min"][leg] = min(self.cur["foot_min"][leg], f[leg])
@@ -432,18 +551,20 @@ def plan_table(steps, notes, total: int, cycles: int) -> list[str]:
 
 def main() -> int:
     argv = sys.argv[1:]
+    entry = "--no-entry" not in argv            # 默认从平地正常站姿起步（多 7 步进入标准状态）
+    base = 0
     cycles = int(argv[argv.index("--cycles") + 1]) if "--cycles" in argv else 4
     rig = G.load_rig("b2")
     fg = G.foot_gids(rig)
     cached = (None if ("--rebuild" in argv or "--plan" in argv or "--view" not in argv)
-              else load_plan(cycles))
+              else load_plan(cycles, base, entry))
     if cached is not None:
-        print(f"读缓存计划（{len(cached)} 段）；要重算加 --rebuild（12 步约 3–5 分钟）")
+        print(f"读缓存计划（{len(cached)} 段）；要重算加 --rebuild")
         segs, steps, notes, final_feet = cached, [], ["（读自缓存，规划表见上一次输出）"], None
     else:
-        segs, steps, notes, final_feet = build(rig, fg, cycles)
+        segs, steps, notes, final_feet = build(rig, fg, cycles, base, entry=entry)
         if segs is not None:
-            save_plan(segs, steps, cycles)
+            save_plan(segs, steps, cycles, base, entry)
     if segs is None:
         print("无法起步：", notes)
         return 1
@@ -457,8 +578,10 @@ def main() -> int:
     servo = float(argv[argv.index("--servo") + 1]) if "--servo" in argv else 1.2
     log = ContactLog(rig, fg)
     res = G.run_plan(rig, segs, fg, hook=log, body_servo=servo)
-    rig0 = G.load_rig("b2")
-    res0 = G.run_plan(rig0, segs, G.foot_gids(rig0), body_servo=0.0)   # 同一条轨迹、纯开环
+    res0 = None
+    if "--quick" not in argv:      # 纯开环对照（同样一条轨迹），翻倍耗时，赶时间时关掉
+        rig0 = G.load_rig("b2")
+        res0 = G.run_plan(rig0, segs, G.foot_gids(rig0), body_servo=0.0)
     lines: list[str] = []
 
     def say(t: str = "") -> None:
@@ -466,10 +589,23 @@ def main() -> int:
 
     done = len(res["beats"])
     say("=" * 104)
-    say("B2「交替跟进」步态：错位姿态起步，一次只动一条腿，一路爬到平台（第 4 级，顶 0.788 m）")
+    say("B2「交替跟进」步态：" + ("平地正常站姿起步 → 7 步进入标准状态 → " if entry else "")
+        + "一次只动一条腿，一路爬到平台（第 4 级，顶 0.788 m）")
     say("=" * 104)
-    lv = start_levels()
-    say("  起步：" + "  ".join(f"{l} 第{lv[l]}级" if lv[l] else f"{l} 地面" for l in G.LEGS))
+    lv = start_levels(base)
+
+    def lname(v: int) -> str:
+        return "地面" if v == 0 else (f"地面{v}" if v < 0 else f"第{v}级")
+
+    if entry:
+        say(f"  起步：平地站姿 —— 四足都在地面（前足 x {GROUND_X + GROUND_FRONT:+.3f}、"
+            f"后足 x {GROUND_X + GROUND_REAR:+.3f}），机身 ({GROUND_X:+.3f}, {GROUND_Z:.3f}) pitch 0°；"
+            f"楼梯鼻端 x {TREAD_REAR0:+.3f}")
+        say("  进入（7 步）：FR 上第1级 / FL 上第1级 / FL 上第2级 / RL、RR 平地前移 / RR 上第1级 / RL 到位")
+        say("  进入后 = 标准状态 " + "  ".join(f"{l}{lname(lv[l])}" for l in G.LEGS)
+            + "（就是之前验证过的爬梯起点），后面是同一套 14 步")
+    else:
+        say("  起步：" + "  ".join(f"{l} {lname(lv[l])}" for l in G.LEGS))
     say("  每循环四步：FR +1（与 FL 汇合）/ RL +1（与 RR 汇合）/ FL +1 / RR +1（与 FR 汇合）")
     say()
     for line in plan_table(steps, notes, total, cycles):
@@ -481,7 +617,7 @@ def main() -> int:
         f"{'支撑腿最小力':>13}   {'四足所在级（实测）'}")
     lift_segs = [x for x in segs if x.lift]     # beats 与抬腿段一一对应（都按顺序）
     for k, b in enumerate(res["beats"]):
-        lvs = " ".join(f"{l}{level_of(rig, b['feet_z'][l])}" for l in G.LEGS)
+        lvs = " ".join(f"{l}{level_of(rig, b['feet_z'][l], b['feet_x'][l])}" for l in G.LEGS)
         sl = log.of(lift_segs[k]) if k < len(lift_segs) else None
         supp = (min(sl["foot_min"][l] for l in G.LEGS if l != b["leg"])
                 if sl else float("nan"))
@@ -489,6 +625,10 @@ def main() -> int:
             f"{b['sink']*1000:+8.0f}mm{b['slip_mm']:7.1f}mm{b.get('peak', 0)*100:8.0f}%"
             f"{b['tilt']:5.0f}°{supp:11.0f}N   {lvs}")
     say(f"    最吃力的关节：{res['peak_act']}（峰值占额 {res['peak_tau']*100:.0f}%）")
+    if res["beats"]:
+        say(f"    机身横向/朝向漂移：y {res['beats'][-1]['y']:.3f}"
+            f"（目标 {G.BODY_Y:.3f}）、yaw {res['beats'][-1]['yaw']:+.1f}°"
+            "（规划只管俯仰，yaw 没有闭环 —— 漂多了腿会一直较劲，FL_thigh 饱和就是这么来的）")
     say(f"    走通 {done}/{total} 步；"
         f"{'在【' + str(res['failed_at']) + '】失去稳定' if res['fell'] else '全程未失稳'}")
     say(f"    末态机身 x {res['x']:+.3f} z {res['z']:.3f}，最大倾角 {res['max_tilt']:.0f}°")
@@ -504,8 +644,9 @@ def main() -> int:
     say(f"    足端高度（实测）：" + "  ".join(f"{l} {res['feet_z'][l]:.3f}" for l in G.LEGS)
         + "（一级顶 0.197 / 二级 0.394 / 三级 0.591 / 平台 0.788，足心在顶面 + 0.035）")
     say()
-    say(f"  对照（同一条轨迹，只改控制）：无机身伺服走通 {len(res0['beats'])}/{total} 步"
-        f"（在 {res0['failed_at'] or '—'} 停），加伺服 k={servo} 走通 {done}/{total} 步。")
+    if res0 is not None:
+        say(f"  对照（同一条轨迹，只改控制）：无机身伺服走通 {len(res0['beats'])}/{total} 步"
+            f"（在 {res0['failed_at'] or '—'} 停），加伺服 k={servo} 走通 {done}/{total} 步。")
 
     final = None
     if not res["fell"] and steps:
@@ -533,13 +674,15 @@ def main() -> int:
     if not res["fell"] and done == total:
         say()
         say(f"  结论：{total} 步全部走通，四足全部落到平台（第 4 级，顶 0.788 m）："
-            f"机身 {0.680:.3f} → {res['z']:.3f} m（升 {(res['z']-0.680)*100:.0f} cm）。"
-            f"全程峰值力矩 {res['peak_tau']*100:.0f}%（{res['peak_act']}）—— 成功登上平台。")
+            f"机身 {0.680:.3f} → {res['z']:.3f} m。"
+            f"全程峰值力矩 {res['peak_tau']*100:.0f}%（{res['peak_act']}）—— 成功登上平台。"
+            + ("起步在平地上（走了 %d 步平地步 + %d 步爬梯）。" % (4, total - 4) if entry else ""))
     elif done >= 4:
         say()
         say(f"  结论：走到第 {done}/{total} 步（{res['failed_at']}）失稳，"
             f"机身到 {res['z']:.3f} m、四足在 "
-            + " ".join(f"{l}{level_of(rig, res['feet_z'][l])}" for l in G.LEGS)
+            + " ".join(f"{l}{level_of(rig, res['feet_z'][l], res.get('feet_x', {}).get(l, 0.0))}"
+                       for l in G.LEGS)
             + f"；峰值力矩 {res['peak_tau']*100:.0f}%（{res['peak_act']}）。")
     else:
         say()
@@ -548,7 +691,7 @@ def main() -> int:
 
     text = "\n".join(lines)
     OUT_TXT.write_text(text + "\n", encoding="utf-8")
-    OUT_JSON.write_text(json.dumps({"cycles": cycles, "steps": steps, "notes": notes,
+    OUT_JSON.write_text(json.dumps({"cycles": cycles, "base": base, "steps": steps, "notes": notes,
                                     "final": final,
                                     "result": {k: v for k, v in res.items() if k != "beats"},
                                     "beats": res["beats"]}, ensure_ascii=False, indent=2),
