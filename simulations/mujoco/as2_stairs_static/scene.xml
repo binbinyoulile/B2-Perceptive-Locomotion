@@ -18,7 +18,6 @@
              rgb1="0.16 0.18 0.20" rgb2="0.22 0.24 0.26"/>
     <material name="grid" texture="grid" texrepeat="12 12" reflectance="0.05"/>
     <material name="steel" rgba="0.42 0.48 0.54 1" specular="0.75" shininess="0.7" reflectance="0.2"/>
-    <mesh name="steel_stair_mesh" file="../../stairs/steel_stair.STL" scale="0.001 0.001 0.001"/>
   </asset>
 
   <worldbody>

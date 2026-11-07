@@ -1,0 +1,19 @@
+<mujoco model="stair only">
+  <visual>
+    <global offwidth="1280" offheight="720" azimuth="145" elevation="-22"/>
+    <headlight ambient="0.35 0.35 0.35" diffuse="0.7 0.7 0.7" specular="0.25 0.25 0.25"/>
+    <rgba haze="0.12 0.18 0.24 1"/>
+    <map znear="0.02" zfar="100"/>
+  </visual>
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1="0.28 0.42 0.58" rgb2="0.03 0.05 0.08" width="512" height="3072"/>
+    <texture name="grid" type="2d" builtin="checker" width="512" height="512" rgb1="0.16 0.18 0.20" rgb2="0.22 0.24 0.26"/>
+    <material name="grid" texture="grid" texrepeat="12 12" reflectance="0.05"/>
+    <material name="steel" rgba="0.42 0.48 0.54 1" specular="0.75" shininess="0.7" reflectance="0.2"/>
+  </asset>
+  <worldbody>
+    <light name="key" pos="2.0 -2.5 4.0" dir="0 0 -1" directional="true"/>
+    <include file="stair_bodies.xml"/>
+  </worldbody>
+  <statistic center="1.2 0.468 0.55" extent="6.0"/>
+</mujoco>

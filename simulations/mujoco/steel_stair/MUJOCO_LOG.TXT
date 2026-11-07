@@ -1,0 +1,4 @@
+WARNING Sat Nov  7 13:54:25 2026: Attach conflict when attaching 'go2' to 'stair only', policy is 'warning'
+impratio: parent has 1 (default), child has 100, keeping parent value
+cone: parent has 0 (default), child has 1, keeping parent value
+

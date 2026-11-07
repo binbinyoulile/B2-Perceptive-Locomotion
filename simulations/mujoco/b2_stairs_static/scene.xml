@@ -19,7 +19,6 @@
     <material name="steel" rgba="0.42 0.48 0.54 1" specular="0.75" shininess="0.7" reflectance="0.2"/>
 
     <!-- STL 原始单位为 mm，因此缩放 0.001；路径相对 meshdir（B2 的 meshes 目录）。 -->
-    <mesh name="steel_stair_mesh" file="../../stairs/steel_stair.STL" scale="0.001 0.001 0.001"/>
   </asset>
 
   <worldbody>

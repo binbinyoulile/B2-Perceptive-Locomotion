@@ -14,4 +14,9 @@ B2 错位对角姿态：FL 三级 / FR 二级 / RR 一级 / RL 地面
 
 2.5 s PD 静置：机身 z 0.7625（指令 0.7800，下沉 +0.018），峰峰 1.45 mm，最大倾角 14.0°，足端滑移 25.88 mm，站住
   末态四足足心高度 [0.597, 0.411, 0.03, 0.226]（目标 [0.598, 0.412, 0.032, 0.227]）
+
+对角交叉步试探（A=FL+RR，B=FR+RL，各上一级；机身位姿保持不变）
+  A 组 FL→平台 / RR→二级        IK 成功，末态 z 0.530，x +0.030
+  B 组 FR→三级 / RL→一级        IK 成功，末态 z 0.221，x -0.160
+  交叉步结束：z 0.224，x -0.240（起手 z 0.780，x 0.400）
 已渲染：b2_staggered_side.png, b2_staggered_iso.png, b2_staggered_front.png, b2_staggered_diag.png, b2_staggered_diag_iso.png
