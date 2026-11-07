@@ -103,21 +103,26 @@ def inradius(poly) -> float:
     return best, best_pt
 
 
-def solve(rig: G.Rig, feet) -> dict | None:
-    """搜重心余量最大的机身位姿（四足可达 + 机身不碰梯级）。"""
+def enumerate_poses(rig: G.Rig, feet, pitch_lo: float = -6.0, pitch_hi: float = 25.0,
+                    ext_max: float = EXT_MAX, xs=None, ys=None, zs=None) -> list[dict]:
+    """枚举所有满足硬约束的机身位姿，返回候选列表（不同目标函数各自去挑）。
+
+    硬约束：四足 IK 可达、伸展 ∈ [EXT_MIN, ext_max]、机身碰撞包络离梯级 ≥ BODY_CLEAR、
+    重心投影落在四足支撑多边形内。这里不排序、不挑"最好"，只把可行集交出去。
+    """
     poly = [(feet[k][0], feet[k][1]) for k in G.LEGS]
-    xs = np.arange(0.26, 0.54, 0.02)
-    ys = np.arange(G.BODY_Y - 0.12, G.BODY_Y + 0.121, 0.02)
-    zs = np.arange(0.46, 0.82, 0.02)
-    pitches = np.radians(np.arange(-6.0, 25.0, 3.0))
-    best = None
+    xs = np.arange(0.26, 0.54, 0.02) if xs is None else xs
+    ys = np.arange(G.BODY_Y - 0.12, G.BODY_Y + 0.121, 0.02) if ys is None else ys
+    zs = np.arange(0.46, 0.82, 0.02) if zs is None else zs
+    pitches = np.radians(np.arange(pitch_lo, pitch_hi + 1e-9, 3.0))
+    out: list[dict] = []
     for x in xs:
         for y in ys:
             for z in zs:
                 for pitch in pitches:
                     body = (float(x), float(y), float(z), float(pitch))
                     joints, ext = G.legs_ik(rig, body, feet)
-                    if joints is None or min(ext.values()) < EXT_MIN or max(ext.values()) > EXT_MAX:
+                    if joints is None or min(ext.values()) < EXT_MIN or max(ext.values()) > ext_max:
                         continue
                     com, gap = G.pose_metrics(rig, body, joints)
                     if gap < G.BODY_CLEAR:
@@ -125,10 +130,19 @@ def solve(rig: G.Rig, feet) -> dict | None:
                     m = poly_margin(com, poly)
                     if m < 0.0:
                         continue
-                    score = m - 0.02 * abs(pitch)      # 同等余量优先小俯仰
-                    if best is None or score > best["score"]:
-                        best = {"score": score, "body": body, "joints": joints, "ext": ext,
-                                "com": com, "margin": m, "gap": gap}
+                    out.append({"body": body, "joints": joints, "ext": ext,
+                                "max_ext": max(ext.values()), "com": com,
+                                "margin": m, "gap": gap})
+    return out
+
+
+def solve(rig: G.Rig, feet) -> dict | None:
+    """单姿态版本：在可行集里挑"余量最大、同等余量优先小俯仰"的那一个。"""
+    cands = enumerate_poses(rig, feet)
+    if not cands:
+        return None
+    best = max(cands, key=lambda c: c["margin"] - 0.02 * abs(c["body"][3]))
+    best["score"] = best["margin"] - 0.02 * abs(best["body"][3])
     return best
 
 
@@ -153,6 +167,8 @@ def hold(rig: G.Rig, feet_gid: dict, pose: dict, seconds: float) -> dict:
         n = mujoco.mj_id2name(rig.model, mujoco.mjtObj.mjOBJ_GEOM, g) or f"geom{g}"
         return n
 
+    feet_ids = set(feet_gid.values())
+    others: set[tuple[str, str]] = set()
     for i in range(data.ncon):
         c = data.contact[i]
         f = np.zeros(6)
@@ -163,6 +179,15 @@ def hold(rig: G.Rig, feet_gid: dict, pose: dict, seconds: float) -> dict:
                 force[leg] += abs(float(f[0]))
                 k = surf(other)
                 touch[leg][k] = touch[leg].get(k, 0.0) + abs(float(f[0]))
+        # 非足端（护板/大腿/机身）与梯级的接触：出现了说明这个姿态是靠腿"搁"在台阶上撑住的
+        for g_robot, g_env in ((int(c.geom1), int(c.geom2)), (int(c.geom2), int(c.geom1))):
+            if g_robot in feet_ids:
+                continue
+            body = mujoco.mj_id2name(rig.model, mujoco.mjtObj.mjOBJ_BODY,
+                                     int(rig.model.geom_bodyid[g_robot])) or f"body{g_robot}"
+            env = surf(g_env)
+            if env.startswith(("up_step", "platform", "floor")):
+                others.add((body, env))
     slip = {leg: float(np.linalg.norm(data.geom_xpos[feet_gid[leg]] - f0[leg])) * 1000
             for leg in G.LEGS}
     poly = [(pose["feet"][k][0], pose["feet"][k][1]) for k in G.LEGS]
@@ -172,7 +197,7 @@ def hold(rig: G.Rig, feet_gid: dict, pose: dict, seconds: float) -> dict:
         "dz": float(data.qpos[2] - p0[2]),
         "dpitch": math.degrees(G.pitch_of(data) - th0),
         "tilt": tilt, "slip_mm": slip, "force": force,
-        "ncon": int(data.ncon), "touch": touch,
+        "ncon": int(data.ncon), "touch": touch, "other_contacts": sorted(others),
         "margin_actual": poly_margin(com, poly),
         "com": com.tolist(), "feet_z": {l: float(data.geom_xpos[feet_gid[l]][2]) for l in G.LEGS},
         "peak_tau": max(lp.peak.values()), "sat_frac": lp.sat / max(1, lp.steps),
