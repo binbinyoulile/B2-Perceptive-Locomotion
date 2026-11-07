@@ -33,3 +33,4 @@ wandb/
 Thumbs.db
 .vscode/
 .idea/
+.tmp/
