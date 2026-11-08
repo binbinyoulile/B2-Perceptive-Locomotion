@@ -1,104 +1,72 @@
-# Unitree Go2 楼梯运动项目
+# 机器狗：B2 爬钢梯
 
-> 当前状态（2026-10-30）：保留 MuJoCo 完整钢梯场景、0.04 m 单级台阶、带机头 LiDAR 的 Go2 模型、规则 FSM Teacher，以及最终 5 万步 FSM + PPO 残差模型。当前模型尚未实现四足稳定登顶，不能宣称已通过 0.195 m 高台阶或完整三层钢梯。
+> **当前状态（2026-11-08）**：B2 从**平地正常站姿起步，20 步全程爬上钢梯平台（0.788 m）**，
+> 四足都落在平台上、全程未失稳。基线标签 `v1.0-FSM-20Steps-Success`。
+> 这是 MuJoCo 仿真结果；真机尚未标定。旧版本 README 写的"Go2 尚未登顶"属于更早的 Go2 阶段，见文末「历史阶段」。
 
-## 项目简介
-
-本项目研究 Unitree Go2 四足机器人在 MuJoCo 中的楼梯运动与分层控制。主线路为 **规则 FSM Teacher + PPO 有界残差 Student**：FSM 生成可解释的基础动作，PPO 只输出小幅关节修正。当前仓库已完成阶段 0/1 的实时展示、感知环境和低台阶短测，后续重点是解决后腿跟随、支撑足锚点与重心转移问题。
-
-## 一键运行
-
-在 PowerShell 中运行完整钢梯 + Go2 实时演示：
+## 最快看到结果
 
 ```powershell
-cd D:\桌面\机器狗; D:\Python313\python.exe .\run_demo.py
+cd "D:\桌面\机器狗"
+D:\Python313\python.exe .\experiments\b2\b2_follow_gait.py --view   # 3D 实时播放：1.4 s 起播、20 步约 91 s
+D:\Python313\python.exe .\experiments\b2\b2_follow_gait.py          # 跑数据：约 2 s（读缓存），写 txt/json
 ```
 
-运行 0.04 m 低台阶 FSM 实时演示：
+实测：**20/20 步**走通、全程未失稳；末态四足接触 `platform` 164/158/178/176 N；
+机身 0.680 → 1.198 m；末态重心余量 183 mm（静置 2 s 不倾覆）；峰值力矩 187%（FL_thigh 瞬态）。
+完整数据与失败档案见 [`docs/B2_PLATFORM_CLIMB.md`](docs/B2_PLATFORM_CLIMB.md)，文档地图见 [`docs/INDEX.md`](docs/INDEX.md)。
 
-```powershell
-cd D:\桌面\机器狗; D:\Python313\python.exe .\fsm_stairs_controller.py --scene low
-```
+## 步态一句话
 
-加载最终 50k PPO 残差模型进行 3D 回放：
+「交替跟进」：一次只动一条腿，每循环 FR+1 → RL+1 → FL+1 → RR+1，四足永远"前足成对一级、后足成对一级"错开，
+不会出现 B2 站不住的"四足同踩一级"。平地起步先走 **6 步入口**进入标准状态 S0（FL2/FR1/RR1/RL0），
+之后是**两段式**：入口跑完读一次实测机身/足端位姿 → 按实测重规划爬梯 14 步 → 不重置地接着跑
+（入口落点与计划差 46 mm，不分段只有 17/20）。控制器 = 50 Hz 关节 PD(800/20) + 重力前馈 + 机身位姿伺服 k=1.2。
 
-```powershell
-cd D:\桌面\机器狗; D:\Python313\python.exe .\reinforcement_learning\eval_fsm_residual.py --model .\experiments\checkpoints\ppo_fsm_residual_50k\ppo_fsm_residual_50k_latest.zip
-```
+## 常用命令
 
-运行时不要求创建或激活虚拟环境；关闭 MuJoCo 窗口或按 `Ctrl+C` 结束。
+| 命令 | 作用 | 耗时 |
+|---|---|---|
+| `... b2_follow_gait.py` | 平地起步 20 步，写 `b2_follow_gait.txt/.json` | 2 s（缓存命中） |
+| `... --view` | 3D 实时播放；`--slow` = 0.5 倍速 | 1.4 s 起播 + 91 s |
+| `... --no-entry --rebuild` | 只跑爬梯段（S0 起步，14/14），强制重算计划 | 约 5 min |
+| `... --one-phase` | 对照：不分段（17/20） | 2 s |
+| `... --plan` | 只规划、打印每步余量/伸展表 | 4–6 min |
+| `... --png` | 额外输出四联过程图 | +5 s |
+| `... --rebuild` | 忽略规划缓存重新算 | 4–7 min |
 
-## 当前能力
-
-- 官方 Unitree Go2 MJCF 与完整钢梯可视化/碰撞资产。
-- 带机头前向 `lidar_site` 的派生 Go2 模型，不修改官方模型。
-- 完整三层钢梯场景及对应 LiDAR 场景。
-- 0.04 m 单级低台阶课程场景。
-- FSM 状态：`FLAT_TROT -> HIGH_STEP -> CRAWL -> CLIMB_PUSH -> DONE/FAILED`。
-- 175 维策略观测，包含关节与机身状态、局部高度图和关节物理限位距离。
-- 最终 PPO 残差模型：`ppo_fsm_residual_50k_latest.zip`。
-
-## 5 万步短测结论
-
-| 方案 | 四足登顶率 | 平均前进距离 | IK 裁剪 | 动作饱和率 |
-|---|---:|---:|---:|---:|
-| 纯 FSM Teacher | 0/20 | +0.267 m | 257 次 | 0% |
-| FSM + 0.10 × PPO | 0/20 | +0.485 m | 0 次 | 0% |
-
-短测消除了 IK 裁剪和关节限位违规，但尚未解决四足登顶。完整对比见 `experiments/evaluations/fsm_residual_50k_compare.txt`，阶段结论见 `docs/FSM_STAGE_REPORT.md`。
-
-## 精简目录
+## 目录（当前链路）
 
 ```text
 机器狗/
-├─ README.md
-├─ requirements-static.txt
-├─ run_demo.py
-├─ fsm_stairs_controller.py
-├─ docs/
-│  ├─ ARCHITECTURE_PLAN.md
-│  ├─ RL_EXPERIMENT_LOG.md
-│  └─ FSM_STAGE_REPORT.md
-├─ experiments/
-│  ├─ checkpoints/ppo_fsm_residual_50k/ppo_fsm_residual_50k_latest.zip
-│  └─ evaluations/fsm_residual_50k_compare.txt
-├─ models/                         官方 Go2、LiDAR 派生模型与钢梯资产
-├─ reinforcement_learning/
-│  ├─ eval_fsm_residual.py         最终模型 3D 回放入口
-│  └─ src/                         环境、奖励、观测、步态与地形感知源码
-└─ simulations/mujoco/go2_stairs_static/
-   ├─ scene.xml                    完整三层钢梯
-   ├─ scene_single_step_004.xml    0.04 m 单级低台阶
-   └─ scene_full_lidar.xml         完整钢梯 LiDAR 版本
+├─ experiments/b2/b2_follow_gait.py            ★ 主脚本（步态生成 + 两段式执行 + 报告）
+├─ experiments/b2/b2_diag_stance.py            位姿枚举 / 非足端避碰 / PD 保持（被主脚本复用）
+├─ experiments/feasibility/three_robot_gait_0272.py   公共工具：rig / IK / PD 循环 / run_plan / pacer
+├─ experiments/b2/b2_follow_gait.{txt,json}    跑数据产物（报告 + 逐拍数据）
+├─ experiments/b2/b2_follow_gait.png           四联过程图（起步 / 第4 / 第8 / 第12 / 第20 步）
+├─ experiments/b2/b2_follow_gait_plan*.json    规划缓存（65 KB；删了首跑要重算 6–7 min）
+├─ simulations/mujoco/b2_stairs_static/scene.xml       场景：级高 0.197 / 踏面 0.272 / 宽 0.81 / μ=1.0
+├─ simulations/mujoco/steel_stair/stair_bodies.xml     钢梯几何（三机共用同一份）
+└─ models/                                     官方模型资产：B2 / Go2 / AS2 + 钢梯 —— **不要删，留作研究**
 ```
 
-`reinforcement_learning/eval_fsm_residual.py` 是核心运行入口之外的唯一必要展示文件；没有它，保留的最终权重无法直接加载到 3D 窗口。
+## 环境
 
-## 环境要求
-
-- Python 3.10+，当前 Windows 验证环境为 `D:\Python313\python.exe`。
-- MuJoCo 3.x、NumPy 2.x、Gymnasium、Stable-Baselines3、PyTorch。
-- 具备 OpenGL 的桌面图形环境，用于打开被动式 MuJoCo 3D 窗口。
-- 依赖版本记录见 `requirements-static.txt`。
-
-## 核心文档
-
-- `docs/ARCHITECTURE_PLAN.md`：Teacher-Student 架构与后续路线。
-- `docs/RL_EXPERIMENT_LOG.md`：强化学习尝试、失败模式与调参记录。
-- `docs/FSM_STAGE_REPORT.md`：FSM 阶段进展、短测结果和已知限制。
-- `docs/GO2_LIMIT_REPORT.md`：0.195 m / 0.18 m 钢梯的物理极限测试与死局因素分析。
-- `docs/B2_VS_M1_REPORT.md`：B2 与 M1 的任务可行性、仿真生态对比与 Sim2Sim 接口规划。
-- `docs/B2_STAND_LOAD_REPORT.md`：B2 参数固化、场景摩擦调整与平地站立/钢梯加载实测。
-- `docs/B2_CROSS_STEP_REPORT.md`：跨级姿态（前足上一级）的搜索、动力学验证与可交互预览。
-- `docs/B2_STAIR_GAIT_REPORT.md`：窄踏面爬梯步态探索（四拍爬行/单足/重心窗口分析）。
-- `docs/AS2_PLATFORM_REPORT.md`：换平台评估——AS2 官方模型、0.18 m 踏面上的三个关键站姿实测、与 B2/Go2 的横向对比、备选机型（D1 Ultra / Mini Pupper 4 / Q1）。
-- `docs/AS2_CLIMB_ATTEMPT_REPORT.md`：AS2 爬梯实测——跨级站姿 → 四拍收腿：第一条后腿收得上、第二条剩 4 mm 重心余量翻倒。
-- `docs/STAIR_0272_UPDATE.md`：钢梯尺寸改为现场实测 0.197/0.272/0.81，三机几何极限表与错位对角四拍实测。
-- `docs/B2_STAGGERED_STANCE_REPORT.md`：B2 错位对角姿态（四足分踩第 3/2/1/0 级）——静态能站住、重心余量 16.5 cm，对角交叉步抬脚即塌。
+Python 3.13（`D:\Python313\python.exe`）、MuJoCo 3.16、NumPy 2.x；依赖见 `requirements-static.txt`。
+不需要虚拟环境。MuJoCo 打不开含中文的绝对路径 —— 脚本内部会 `chdir`，所以**命令必须在项目根目录下运行**。
 
 ## 已知限制
 
-- 0.04 m 低台阶尚未实现稳定的四足登顶。
-- 后腿跟随、支撑足锚点与机身姿态改变时的 IK 可达性仍是主要问题。
-- 0.195 m 高台阶和完整三层钢梯尚未完成跨越验证。
-- 当前没有真机标定、质量/摩擦域随机化或完整安全盾。
+- 纯关节 PD + 一个比例型机身位姿伺服，没有真正的姿态/力矩闭环，也没有足端力控；同一条轨迹纯开环只能走 1/14 步。
+- 每步 3 s（挪重心 1.0 + 抬腿 1.5 + 落定 0.5；入口段再慢 1.4 倍），比真机可接受的速度慢。
+- 机身只按 pitch 参数化，yaw/横向没有闭环。
+- 没有真机标定、质量/摩擦域随机化或安全盾；目前只到第一段楼梯的平台，还没连爬多段。
+
+## 历史阶段（保留，不参与当前链路）
+
+| 阶段 | 入口 | 结论 |
+|---|---|---|
+| Go2 + 规则 FSM + PPO 残差（2026-10） | `run_demo.py`、`fsm_stairs_controller.py`、`reinforcement_learning/`、`docs/{ARCHITECTURE_PLAN,RL_EXPERIMENT_LOG,FSM_STAGE_REPORT}.md` | 0/20 登顶，转纯脚本化步态 |
+| 机型评估与场景复测（2026-11-06/07） | `experiments/as2/`、`experiments/feasibility/`、`docs/{AS2_*,GO2_LIMIT_REPORT,B2_VS_M1_REPORT,THREE_ROBOT_COMPARE,STAIR_0272_UPDATE}.md` | 定 B2、钢梯改 0.197/0.272 |
+| 姿态与窄踏面探索（2026-11-06/07） | `experiments/b2/b2_{step_pose,staggered_stance,stair_gait,crawl_0272,stance_compare}.py`、`docs/B2_{CROSS_STEP,STAGGERED_STANCE,STAIR_GAIT,STAND_LOAD}_REPORT.md` | 定「交替跟进」+ 机身位姿伺服 |
+| 旧版交接文档 | `PROJECT_HANDOFF.md`（2026-11-05，925 行） | 机器狗系统说明的历史快照 |
