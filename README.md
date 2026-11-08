@@ -1,5 +1,10 @@
 # 机器狗：B2 爬钢梯
 
+![version](https://img.shields.io/badge/version-v1.0-blue?style=flat-square)
+![MuJoCo](https://img.shields.io/badge/MuJoCo-3.x-orange?style=flat-square)
+
+基于 MuJoCo 的核应急四足机器人（Unitree B2）感知运动控制，实现从平地起步到 20 步攀爬高架钢梯的 FSM 与姿态伺服闭环。
+
 > **当前状态（2026-11-08）**：B2 从**平地正常站姿起步，20 步全程爬上钢梯平台（0.788 m）**，
 > 四足都落在平台上、全程未失稳。基线标签 `v1.0-FSM-20Steps-Success`。
 > 这是 MuJoCo 仿真结果；真机尚未标定。旧版本 README 写的"Go2 尚未登顶"属于更早的 Go2 阶段，见文末「历史阶段」。
