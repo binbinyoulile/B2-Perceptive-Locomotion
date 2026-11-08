@@ -1,7 +1,7 @@
 # 文档地图（先读这一页）
 
 > 目的：新会话（人或 AI）只读这一页就能知道**当前在做什么、跑哪条命令、改哪里、别删什么**，
-> 不用把 1672 行的 `PROJECT_HANDOFF.md` 从头读一遍。
+> 不用去翻早已移除的内部交接文档。
 
 ## 1. 当前基线（2026-11-08）
 
@@ -23,7 +23,6 @@
 | `GO2_LIMIT_REPORT.md` / `B2_VS_M1_REPORT.md` | Go2 极限、换平台评估 | ⛔ 历史 |
 | `AS2_PLATFORM_REPORT.md` / `AS2_CLIMB_ATTEMPT_REPORT.md` | AS2 尝试后放弃 | ⛔ 历史 |
 | `ARCHITECTURE_PLAN.md` / `RL_EXPERIMENT_LOG.md` / `FSM_STAGE_REPORT.md` | Go2 + FSM/PPO 阶段（0/20 登顶） | ⛔ 历史 |
-| `../PROJECT_HANDOFF.md` | 2026-11-05 的系统交接文档（1672 行） | ⛔ 历史快照 |
 
 ## 3. 代码地图
 

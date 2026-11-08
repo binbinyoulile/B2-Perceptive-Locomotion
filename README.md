@@ -5,6 +5,8 @@
 
 基于 MuJoCo 的核应急四足机器人（Unitree B2）感知运动控制，实现从平地起步到 20 步攀爬高架钢梯的 FSM 与姿态伺服闭环。
 
+本项目依托上海交大校企联培项目背景，聚焦核应急场景。
+
 > **当前状态（2026-11-08）**：B2 从**平地正常站姿起步，20 步全程爬上钢梯平台（0.788 m）**，
 > 四足都落在平台上、全程未失稳。基线标签 `v1.0-FSM-20Steps-Success`。
 > 这是 MuJoCo 仿真结果；真机尚未标定。旧版本 README 写的"Go2 尚未登顶"属于更早的 Go2 阶段，见文末「历史阶段」。
@@ -74,4 +76,3 @@ Python 3.13（`D:\Python313\python.exe`）、MuJoCo 3.16、NumPy 2.x；依赖见
 | Go2 + 规则 FSM + PPO 残差（2026-10） | `run_demo.py`、`fsm_stairs_controller.py`、`reinforcement_learning/`、`docs/{ARCHITECTURE_PLAN,RL_EXPERIMENT_LOG,FSM_STAGE_REPORT}.md` | 0/20 登顶，转纯脚本化步态 |
 | 机型评估与场景复测（2026-11-06/07） | `experiments/as2/`、`experiments/feasibility/`、`docs/{AS2_*,GO2_LIMIT_REPORT,B2_VS_M1_REPORT,THREE_ROBOT_COMPARE,STAIR_0272_UPDATE}.md` | 定 B2、钢梯改 0.197/0.272 |
 | 姿态与窄踏面探索（2026-11-06/07） | `experiments/b2/b2_{step_pose,staggered_stance,stair_gait,crawl_0272,stance_compare}.py`、`docs/B2_{CROSS_STEP,STAGGERED_STANCE,STAIR_GAIT,STAND_LOAD}_REPORT.md` | 定「交替跟进」+ 机身位姿伺服 |
-| 旧版交接文档 | `PROJECT_HANDOFF.md`（2026-11-05，1672 行） | 机器狗系统说明的历史快照 |
