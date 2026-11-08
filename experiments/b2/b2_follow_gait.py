@@ -593,6 +593,31 @@ def plan_table(steps, notes, total: int, cycles: int) -> list[str]:
     return out
 
 
+def run_two_phase(rig: G.Rig, fg, cycles: int, base: int, servo: float,
+                  hook=None, sync=None):
+    """两段式跑法：入口段 → 读实测位姿 → 按实测重规划爬梯段 → 不重置地接着跑。
+
+    返回 (合并结果, 全部步骤, 全部说明, 实际跑的段, 入口步数)；失败时返回已完成的那部分。
+    这是 20/20 能走通的关键：入口结束时足端与标准状态目标差 46 mm，
+    不分段的话爬梯段每一拍的位姿都和现实不自洽（实测只有 17/20）。
+    """
+    e_segs, e_steps, e_notes, _ = build(rig, fg, cycles, base, entry=True, only_entry=True)
+    if e_segs is None:
+        print("入口规划失败：", e_notes)
+        return None, [], e_notes, [], 0
+    res1 = G.run_plan(rig, e_segs, fg, hook=hook, body_servo=servo, sync=sync)
+    if res1["fell"]:
+        return res1, e_steps, e_notes, e_segs, len(e_steps)
+    st = read_state(rig, fg)
+    c_segs, c_steps, c_notes, _ = build(rig, fg, cycles, base, state=st)
+    if c_segs is None:
+        print("按实测重规划爬梯段失败：", c_notes)
+        return res1, e_steps, e_notes + c_notes, e_segs, len(e_steps)
+    res2 = G.run_plan(rig, c_segs, fg, hook=hook, body_servo=servo, sync=sync, reset=False)
+    return (merge_res(res1, res2), e_steps + c_steps, e_notes + c_notes,
+            e_segs + c_segs, len(e_steps))
+
+
 def main() -> int:
     argv = sys.argv[1:]
     entry = "--no-entry" not in argv            # 默认从平地正常站姿起步（多 7 步进入标准状态）
@@ -614,7 +639,7 @@ def main() -> int:
         return 1
     total = len([x for x in segs if x.lift])
     if "--view" in argv:
-        return view(rig, fg, segs, steps)
+        return view(rig, fg, segs, steps, cycles, base, entry, "--one-phase" in argv)
     if "--plan" in argv:        # 只规划（几十秒），先确认每步都可解再花几分钟跑动力学
         print("\n".join(plan_table(steps, notes, total, cycles)))
         return 0
@@ -624,27 +649,11 @@ def main() -> int:
     res = None
     run_segs, n_entry = segs, 0
     if entry and "--one-phase" not in argv:
-        # 两段式：入口段跑完 → 读实测位姿 → 按实测重规划爬梯段 → 不重置地接着跑。
-        # 动机：同一套爬梯计划从标准状态直接起步是 14/14，从平地走完入口再跑就翻在第 18 步，
-        # 说明差的是"走路入场的动态历史"，那就让爬梯段按现实（而不是名义 S0）来规划。
-        e_segs, e_steps, e_notes, _ = build(rig, fg, cycles, base, entry=True, only_entry=True)
-        if e_segs is None:
-            print("入口规划失败：", e_notes)
+        # 两段式：入口跑完 → 读实测位姿 → 按实测重规划爬梯段 → 不重置接着跑（--one-phase 做对照）
+        res, steps, notes, run_segs, n_entry = run_two_phase(
+            rig, fg, cycles, base, servo, hook=log)
+        if res is None:
             return 1
-        res1 = G.run_plan(rig, e_segs, fg, hook=log, body_servo=servo)
-        if res1["fell"]:
-            res = res1
-            steps, notes = e_steps, e_notes
-        else:
-            st = read_state(rig, fg)
-            c_segs, c_steps, c_notes, c_feet = build(rig, fg, cycles, base, state=st)
-            if c_segs is None:
-                print("按实测重规划失败：", c_notes)
-                return 1
-            res2 = G.run_plan(rig, c_segs, fg, hook=log, body_servo=servo, reset=False)
-            res = merge_res(res1, res2)
-            steps, notes, final_feet = e_steps + c_steps, e_notes + c_notes, c_feet
-            run_segs, n_entry = e_segs + c_segs, len(e_steps)
     if res is None:
         res = G.run_plan(rig, segs, fg, hook=log, body_servo=servo)
     res0 = None
@@ -833,14 +842,16 @@ def render(rig: G.Rig, fg, segs, steps, res, servo: float = 1.2, picks=None) -> 
     print("WROTE", OUT_PNG)
 
 
-def view(rig: G.Rig, fg, segs, steps) -> int:
-    """3D 慢动作：播整条步态，播完停在窗口里（--fast = 1 倍速）。"""
+def view(rig: G.Rig, fg, segs, steps, cycles: int = 4, base: int = 0,
+         entry: bool = True, one_phase: bool = False) -> int:
+    """3D 慢动作：播整条步态（与跑数据同一条流程），播完停在窗口里（--fast = 1 倍速）。"""
     import mujoco.viewer
 
     hz = 50.0 if "--fast" in sys.argv[1:] else 25.0
     model, data = rig.model, rig.data
     n_lift = len([x for x in segs if x.lift])
-    print(f"  播放（{hz/50:.1f} 倍速）：{n_lift} 步（{'→'.join(x.lift for x in segs if x.lift)}），"
+    print(f"  播放（{hz/50:.1f} 倍速）：{n_lift} 步"
+          f"{'（两段式：入口 → 实测重规划 → 爬梯）' if entry and not one_phase else ''}，"
           f"每步 挪重心→抬腿→落定")
     with mujoco.viewer.launch_passive(model, data, show_left_ui=False,
                                       show_right_ui=False) as viewer:
@@ -855,9 +866,14 @@ def view(rig: G.Rig, fg, segs, steps) -> int:
                                     float(data.qpos[2]) - 0.12)
 
         sync = G.pacer(viewer, on_frame=follow, hz=hz)
-        res = G.run_plan(rig, segs, fg, sync=sync, body_servo=1.2)
+        if entry and not one_phase:
+            res, _, _, _, _ = run_two_phase(rig, fg, cycles, base, 1.2, sync=sync)
+        else:
+            res = G.run_plan(rig, segs, fg, sync=sync, body_servo=1.2)
         print(f"  结果：走通 {len(res['beats'])}/{n_lift} 步，"
-              f"{'在 ' + str(res['failed_at']) + ' 失稳' if res['fell'] else '全程未失稳'}")
+              f"{'在 ' + str(res['failed_at']) + ' 失稳' if res['fell'] else '全程未失稳'}"
+              f"，末态机身 x {res['x']:+.3f} z {res['z']:.3f}"
+              + ("，四足都在平台上了" if not res["fell"] else ""))
         G.hold_open(viewer)
     return 0
 
