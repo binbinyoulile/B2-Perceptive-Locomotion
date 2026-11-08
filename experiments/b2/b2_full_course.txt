@@ -1,0 +1,61 @@
+============================================================================================================
+B2 完整作业流：平地起步 → 自主走到楼梯口 → 按实测重规划入场 → 20 步爬梯 → 登顶站直 → 平台前行
+============================================================================================================
+  平地走近                8 步   机身 x -0.715 → -0.115   z 0.550 → 0.550   pitch +0.0° → +0.0°
+  按实测重规划入口            6 步   机身 x -0.172 → +0.360   z 0.539 → 0.680   pitch +1.1° → +3.0°
+  爬梯（20 步核心）         14 步   机身 x +0.358 → +1.378   z 0.668 → 1.208   pitch +2.5° → +9.0°
+  登顶站直 + 平台前行         8 步   机身 x +1.385 → +1.865   z 1.199 → 1.258   pitch +7.3° → +0.0°
+
+  · （走近段读自缓存）
+  · （入口段读自缓存）
+  · （爬梯段读自缓存）
+  · （平台段读自缓存）
+
+  实测（PD 800/20 + 机身位姿伺服 k=1.2；每步 挪重心 1.0 s → 抬腿 1.5 s → 落定 0.5 s；抬脚离目标 6 cm）：
+    步骤           抬脚高度     机身下沉      打滑     力矩峰值    倾角   四足所在级（实测）
+    抬FL           88mm     +13mm    5.2mm      28%    3°   FL-1 FR-2 RL-4 RR-4
+    抬FR           63mm     +15mm   17.5mm      37%    4°   FL-1 FR-1 RL-4 RR-4
+    抬RL           65mm     +11mm   10.9mm      28%    5°   FL-1 FR-1 RL-3 RR-4
+    抬RR           34mm     +11mm   24.0mm      39%    5°   FL-1 FR-1 RL-3 RR-3
+    抬FL           56mm     +12mm   10.3mm      36%    5°   FL0 FR-1 RL-3 RR-3
+    抬FR           62mm     +13mm   17.4mm      31%    5°   FL0 FR0 RL-3 RR-3
+    抬RL           73mm     +10mm    9.2mm      21%    5°   FL0 FR0 RL-2 RR-3
+    抬RR           60mm     +11mm   15.7mm      34%    5°   FL0 FR0 RL-1 RR-2
+    抬FR          369mm     +23mm   26.4mm      65%    8°   FL0 FR? RL-1 RR-2
+    抬FL          251mm     +20mm   26.0mm      46%   12°   FL1 FR1 RL-1 RR-2
+    抬RL           71mm     +12mm   22.6mm      43%   12°   FL1 FR1 RL0 RR-2
+    抬RR           52mm     +12mm   20.9mm      38%   17°   FL1 FR1 RL0 RR0
+    抬FL          279mm     +20mm   15.4mm      46%   21°   FL2 FR1 RL0 RR0
+    抬RR          256mm     +13mm    9.1mm      48%   22°   FL2 FR1 RL0 RR1
+    抬FR          236mm     +13mm   38.5mm      38%   10°   FL2 FR2 RL0 RR1
+    抬RL          266mm     +10mm    7.8mm      36%   16°   FL2 FR2 RL1 RR1
+    抬FL          267mm     +14mm   14.8mm      35%   19°   FL3 FR2 RL1 RR1
+    抬RR          273mm     +13mm    7.3mm      31%   20°   FL3 FR2 RL1 RR2
+    抬FR          212mm     +15mm   35.2mm      47%   20°   FL3 FR3 RL1 RR2
+    抬RL          232mm     +12mm   23.7mm      41%   21°   FL3 FR3 RL2 RR2
+    抬FL          274mm     +13mm   11.7mm     128%   25°   FL4 FR3 RL2 RR2
+    抬RR          273mm     +12mm    7.9mm      31%   26°   FL4 FR3 RL2 RR3
+    抬FR          212mm     +14mm   33.8mm      48%   26°   FL4 FR4 RL2 RR3
+    抬RL          243mm     +12mm   17.8mm      38%   26°   FL4 FR4 RL3 RR3
+    抬FL          105mm     +22mm    4.7mm      44%   26°   FL4 FR4 RL3 RR3
+    抬FR           61mm     +26mm   12.0mm      41%   26°   FL4 FR4 RL3 RR3
+    抬RR          271mm     +12mm   28.2mm      33%   26°   FL4 FR4 RL3 RR4
+    抬RL          255mm     +14mm   23.0mm      58%   26°   FL4 FR4 RL4 RR4
+    抬FL           39mm     +10mm    5.9mm      55%    8°   FL4 FR4 RL4 RR4
+    抬FR           61mm     +14mm    9.2mm      39%    8°   FL4 FR4 RL4 RR4
+    抬RL           54mm     +11mm   11.1mm      37%    8°   FL4 FR4 RL4 RR4
+    抬RR           23mm     +10mm   14.6mm      35%    8°   FL4 FR4 RL4 RR4
+    抬FL           69mm     +11mm   14.7mm      57%    8°   FL4 FR4 RL4 RR4
+    抬FR           63mm     +15mm    8.4mm      39%    8°   FL4 FR4 RL4 RR4
+    抬RL           58mm     +11mm   11.4mm      35%    8°   FL4 FR4 RL4 RR4
+    抬RR           21mm     +10mm   15.0mm      36%    8°   FL4 FR4 RL4 RR4
+    走通 36/36 步；全程未失稳
+    峰值：FL_thigh 占额 128%；最大倾角 26°
+
+  末态核验（原地静置 2 s，读 contact 里真实生效的 geom 与法向力）：
+    机身 (1.865, 0.448, 1.258)  pitch +0.0°（平台顶 0.788 + 站高 0.470；比平地站高 0.550 低 8 cm —— 为了在漂移后的站姿上还有横向修正余量）
+    静置：Δx -60 / Δy -11 / Δz -27 mm，倾角 7.7°，打滑 23.0 mm，力矩峰值 32%，未倾覆
+    四足接触：FL→platform 79N  FR→platform 195N  RL→platform 181N  RR→platform 222N
+    四足都在平台（platform geom）上：是
+
+  结论：四段全通、36 步走通（走近 8 + 入口 6 + 爬梯 14 + 平台 8），机身 x +1.857、z 1.249；峰值力矩 128%（FL_thigh）

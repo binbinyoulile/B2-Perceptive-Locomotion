@@ -105,6 +105,28 @@ GROUND_FRONT, GROUND_REAR = 0.30, -0.185   # 平地站姿的前/后足离机身�
 #   收一点（后髋前 0.16 m）看着仍是正常站姿，后足两步就能上到位。
 
 
+# ---- 完整作业流（--demo）的参数：平地走近 → 入口 → 爬梯 → 登顶站直 + 平台前行 ----
+APPROACH_X = -0.715          # 平地起步的机身 x：比入口起点 GROUND_X(-0.115) 后退 0.6 m
+APPROACH_CYCLES = 2          # 走近段 = 2 个循环 = 8 步
+APPROACH_STRIDE = 0.30       # 步幅 0.30 m → 2 循环正好前进 0.60 m，落点回到名义站姿
+PLAT_CYCLES = 2              # 平台段 = 2 个循环 = 8 步
+PLAT_STRIDE = 0.26
+PLAT_STAND_OFF = 0.470       # 站直后机身离平台顶多高。平地站姿是 0.550，这里取 0.470：
+#   实测站到全高（1.338 m）时腿伸展 84%，而爬梯末态在平台上带 5–10 cm 横向/偏航漂移，
+#   三足支撑那一拍没有修正余量 → 前倾 45° 摔倒；低 8 cm 后 8/8 步全通（倾角 19°、峰值 92%）。
+PLAT_PITCH_HI = 8.0          # 平台段允许的抬头（越小越像正常走路，但三足支撑时余量会小一点）
+STANDUP_S = 4.0              # 登顶后「站直」（仰 9° → 0°、z 1.208 → 1.338）用这么久；太短会残留 15° 倾角
+
+
+def approach_stance(rig: G.Rig):
+    """完整作业流的起点：和入口站姿同一个正常站姿，只是整体后退 APPROACH 距离。"""
+    feet = {}
+    for leg in G.LEGS:
+        dx = GROUND_FRONT if leg in ("FL", "FR") else GROUND_REAR
+        feet[leg] = (APPROACH_X + dx, G.BODY_Y + rig.foot_y[leg], rig.r + PRELOAD)
+    return feet, (APPROACH_X, G.BODY_Y, GROUND_Z, 0.0)
+
+
 def ground_stance(rig: G.Rig):
     """平地正常站姿：四足都在地面、俯仰 0、机身 0.55 m。（这是"狗先正常站在那儿"的那一帧。）"""
     feet = {}
@@ -250,16 +272,20 @@ def merge_res(a, b):
 
 
 def build(rig: G.Rig, fg, cycles: int, base: int = 0, entry: bool = False,
-          only_entry: bool = False, state: dict | None = None):
-    """生成整条轨迹 + 每步的计划信息。返回 (segs, steps, notes, 末态 feet)。
+          only_entry: bool = False, state: dict | None = None,
+          approach: bool = False, only_approach: bool = False,
+          platform: bool = False, only_platform: bool = False):
+    """生成某一段轨迹 + 每步的计划信息。返回 (segs, steps, notes, 末态 feet)。
 
-    entry=True：从平地正常站姿起步，先走 7 步进入标准状态 S0，再接 base=0 的爬梯计划。
+    entry=True：从平地正常站姿起步，走 6 步进入标准状态 S0，再接 base=0 的爬梯计划。
     entry=False：直接从 S0（楼梯上的错位姿态）起步 —— 就是之前验证过的那 14 步。
     only_entry=True：只生成入口那一段（两段式流程的第一段）。
-    state=实测状态：按实测机身/足端位姿生成爬梯段（两段式流程的第二段，不再走入口）。
+    state=实测状态：按实测机身/足端位姿生成（爬梯段 / 入口段 / 平台段都可以用）。
+    approach=True（配合 only_approach）：平地起步段 —— 从楼梯口后方的正常站姿走到入口起点。
+    platform=True（配合 only_platform）：登顶后段 —— 先站直，再在平台上往前走几步。
     """
     notes: list[str] = []
-    if state is not None:
+    if state is not None and not (entry or approach or platform):
         # 两段式流程的第二段：入口已经跑完，按**实测**机身/足端位姿生成爬梯段。
         # 不插"起步稳住"段（机器人已经在那儿了，不需要再摆一次）。
         feet = {leg: tuple(state["feet"][leg]) for leg in G.LEGS}
@@ -271,8 +297,8 @@ def build(rig: G.Rig, fg, cycles: int, base: int = 0, entry: bool = False,
         levels = dict(levels0)
         segs, steps = [], []
         cur = body
-    elif entry:
-        feet, gbody = ground_stance(rig)
+    elif approach:
+        feet, gbody = approach_stance(rig)
         joints, ext = G.legs_ik(rig, gbody, feet)
         if joints is None:
             return None, [], ["平地站姿 IK 不可达"], None
@@ -280,13 +306,62 @@ def build(rig: G.Rig, fg, cycles: int, base: int = 0, entry: bool = False,
         poly = [(feet[k][0], feet[k][1]) for k in G.LEGS]
         body = {"body": gbody, "joints": joints, "ext": ext, "max_ext": max(ext.values()),
                 "com": com, "margin": G.margin_in_poly(com, poly), "gap": gap}
+        levels = start_levels(base)
+        segs = [G.Seg("起步站稳", 0.6, gbody, gbody, dict(feet), dict(feet))]
+        steps = []
+        cur = body
+        notes.append(f"平地起步：机身 ({gbody[0]:+.3f}, {gbody[2]:.3f}) pitch 0°、四足在地面站姿；"
+                     f"距入口起点 {GROUND_X - gbody[0]:.2f} m")
+    elif platform:
+        if state is None:
+            return None, [], ["平台段需要实测状态"], None
+        feet = {leg: tuple(float(v) for v in state["feet"][leg]) for leg in G.LEGS}
+        body0 = tuple(float(v) for v in state["body"])
+        stand = (body0[0], G.BODY_Y, LEVEL_TOP[TOP_LEVEL] + PLAT_STAND_OFF, 0.0)
+        joints, _ = G.legs_ik(rig, stand, feet)
+        if joints is None:
+            return None, [], ["平台站直位姿 IK 不可达"], None
+        # 登顶后先停一拍再站起来：爬梯最后一步（后足上平台）落地时还在晃，
+        # 立刻抬腿会让支撑腿打滑（实测第一拍打滑 248 mm、跟着侧翻 45°）。
+        segs = [G.Seg("登顶停顿", 1.5, body0, body0, dict(feet), dict(feet)),
+                G.Seg("登顶站稳", STANDUP_S, body0, stand, dict(feet), dict(feet)),
+                G.Seg("站定", 2.0, stand, stand, dict(feet), dict(feet))]
+        steps = []
+        body = {"body": stand, "max_ext": 0.0, "margin": 0.0, "ext": {}}
+        cur = body
+        levels = start_levels(base)
+        notes.append(f"登顶站直：机身 z {body0[2]:.3f} pitch {math.degrees(body0[3]):+.1f}° → "
+                     f"z {stand[2]:.3f} pitch 0°（平台顶 {LEVEL_TOP[TOP_LEVEL]:.3f} + 站高 {PLAT_STAND_OFF:.3f}，"
+                     f"比平地站高 {GROUND_Z:.3f} 低 {(GROUND_Z - PLAT_STAND_OFF)*100:.0f} cm 以留横向修正余量）")
+    elif entry:
+        if state is not None:
+            # 完整作业流的第一段之后：机器狗是自己走过来的，落点不可能正好等于名义站姿，
+            # 所以入口段也按实测重规划（和爬梯段同一个思路，见 docs/B2_PLATFORM_CLIMB.md §6）。
+            feet = {leg: tuple(float(v) for v in state["feet"][leg]) for leg in G.LEGS}
+            gbody = tuple(float(v) for v in state["body"])
+            dev = max(max(abs(feet[leg][k] - ground_stance(rig)[0][leg][k]) for k in (0, 2))
+                      for leg in G.LEGS)
+            notes.append(f"按实测重规划入口段：实测落点与平地站姿最大偏差 {dev*1000:.0f} mm、"
+                         f"机身 ({gbody[0]:+.3f}, {gbody[2]:.3f}) pitch {math.degrees(gbody[3]):+.1f}°")
+        else:
+            feet, gbody = ground_stance(rig)
+        joints, ext = G.legs_ik(rig, gbody, feet)
+        if joints is None:
+            return None, [], ["平地站姿 IK 不可达"], None
+        com, gap = G.pose_metrics(rig, gbody, joints)
+        poly = [(feet[k][0], feet[k][1]) for k in G.LEGS]
+        body = {"body": gbody, "joints": joints, "ext": ext, "max_ext": max(ext.values()),
+                "com": com, "margin": G.margin_in_poly(com, poly), "gap": gap}
+        levels = start_levels(base)
+        segs, steps = [], []
+        cur = body
     else:
         levels0 = start_levels(base)
         feet = {leg: foot_target(rig, leg, levels0[leg]) for leg in G.LEGS}
         body = solve(rig, fg, feet, G.LEGS)
     if body is None:
         return None, [], ["起步姿态无可行解"], None
-    if state is None:
+    if state is None and not entry:
         levels = start_levels(base)
         segs = [G.Seg("起步稳住", 0.6, body["body"], body["body"], dict(feet), dict(feet))]
         steps = []
@@ -370,6 +445,45 @@ def build(rig: G.Rig, fg, cycles: int, base: int = 0, entry: bool = False,
         cur = settled
         return True
 
+    # 平地四拍（走近段 / 平台段共用）：一次只动一条腿，腿落点 = 自己原位 + 步幅，
+    # 机身锚点 = 上一位姿往前 1/4 步幅（平滑前进），位姿仍由 solve 在窗口内搜：
+    # 实测"直接按几何位置摆机身"会在最后一条腿抬起那拍把重心丢到支撑三角形外（−36 mm、侧翻 48°），
+    # 所以必须让 solve 在 ±12 cm 窗口里挑一个余量够的位姿；俯仰压到 10° 以内，看起来是平地走路。
+    def flat_walk(n_cycles: int, stride: float, z_stand: float, tag: str,
+                  pitch_hi: float = 10.0, slow: float = 1.15) -> bool:
+        nonlocal cur
+        for c in range(n_cycles):
+            for leg in G.LEGS:
+                anchor = (cur["body"][0] + stride / 4.0, G.BODY_Y, z_stand, 0.0)
+                nf = dict(feet)
+                nf[leg] = (feet[leg][0] + stride, feet[leg][1], feet[leg][2])
+                if not do_step(leg, nf, f"{tag}{c+1}", c + 1, pitch_hi=pitch_hi,
+                               anchor=anchor, win=0.12, slow=slow):
+                    return False
+        return True
+
+    # ---- 完整作业流的首段：平地走近（从后方站姿走到入口起点）----
+    if approach:
+        if not flat_walk(APPROACH_CYCLES, APPROACH_STRIDE, GROUND_Z, "走近"):
+            return segs, steps, notes, feet
+        gfeet, gbody = ground_stance(rig)
+        dev = max(abs(feet[leg][0] - gfeet[leg][0]) for leg in G.LEGS)
+        segs.append(G.Seg("走近后对齐站姿", 1.5, cur["body"], gbody, dict(feet), dict(feet)))
+        cur = {"body": gbody}
+        notes.append(f"走近完成：机身 x {gbody[0]:+.3f}，四足落点与入口站姿偏差 {dev*1000:.0f} mm")
+        if only_approach:
+            return segs, steps, notes, feet
+
+    # ---- 完整作业流的末段：登顶站直 + 平台前行 ----
+    if platform:
+        if not flat_walk(PLAT_CYCLES, PLAT_STRIDE, LEVEL_TOP[TOP_LEVEL] + PLAT_STAND_OFF, "平台", pitch_hi=PLAT_PITCH_HI):
+            return segs, steps, notes, feet
+        segs.append(G.Seg("站定", 0.8, cur["body"], cur["body"], dict(feet), dict(feet)))
+        notes.append(f"平台行走完成：机身 x {cur['body'][0]:+.3f}（平台后沿 "
+                     f"{edge_x(TOP_LEVEL):.3f}，顶 {LEVEL_TOP[TOP_LEVEL]:.3f}）")
+        if only_platform:
+            return segs, steps, notes, feet
+
     # 平地起步：先走 7 步进入标准状态 S0（前两足先上第 1 级，再把后足挪到位）。
     # 这一段把俯仰压到 0°：不压的话规划器会为了"多要点余量"把机身一路抬到 30°，
     # 看起来是原地越抬越高，不是走路。
@@ -435,6 +549,9 @@ def build(rig: G.Rig, fg, cycles: int, base: int = 0, entry: bool = False,
 
 PLAN_JSON = ROOT / "experiments" / "b2" / "b2_follow_gait_plan.json"
 CLIMB_JSON = ROOT / "experiments" / "b2" / "b2_follow_gait_plan_climb.json"
+ENTRY_JSON = ROOT / "experiments" / "b2" / "b2_follow_gait_plan_entry.json"
+APPROACH_JSON = ROOT / "experiments" / "b2" / "b2_follow_gait_plan_approach.json"
+PLATFORM_JSON = ROOT / "experiments" / "b2" / "b2_follow_gait_plan_platform.json"
 # 规划参数指纹：改了任何一个规划参数，爬梯段缓存自动失效（否则会悄悄复用手改参数之前的计划）
 PLAN_FINGERPRINT = (PITCH_HI, EDGE, PRELOAD, SWING_CLEAR, EXT_CAP, WIN_X, WIN_Z,
                     SHIFT_S, LIFT_S, SETTLE_S, PLAT_FRONT, PLAT_REAR, PLAT_ADJ,
@@ -483,36 +600,53 @@ def entry_part(rig: G.Rig, fg, cycles: int, base: int = 0, segs=None):
     return build(rig, fg, cycles, base, entry=True, only_entry=True)[0]
 
 
-def plan_climb(rig: G.Rig, fg, cycles: int, base: int, st: dict, use_cache: bool = True):
-    """按实测状态规划爬梯段，同样的实测状态直接复用上次结果。
+def state_key(st: dict) -> list:
+    """实测状态的缓存键：机身 4 个量 + 四足各 3 个坐标，取到毫米/毫弧度。"""
+    return [round(float(v), 3) for v in st["body"]] + [
+        round(float(c), 3) for leg in G.LEGS for c in st["feet"][leg]]
 
-    为什么要缓存：这一段（14 步的位姿搜索）是一次几分钟的计算，以前是入口走完才开始算，
+
+def cached_plan(path, rig: G.Rig, fg, cycles: int, base: int, st: dict, label: str,
+                build_kw: dict, use_cache: bool = True):
+    """按实测状态规划某一段，并把结果按「实测状态 + 规划参数指纹」缓存下来。
+
+    为什么要缓存：爬梯段（14 步的细网格位姿搜索）一次要 6 分钟，以前是入口走完才现场算，
     于是 --view 里机器狗在窗前站着不动好几分钟 —— 看着像卡死，其实在规划。
-    现在规划全部放在开窗口之前，而且第二次跑同样状态就是读缓存、几乎不等。
+    现在规划全部放在开窗口之前，而且同样的实测状态第二次跑就是读缓存、几乎不等。
     """
-    key = [round(v, 3) for v in st["body"]] + [
-        round(c, 3) for leg in G.LEGS for c in st["feet"][leg]]
+    key = state_key(st)
     hit = None
-    if use_cache and CLIMB_JSON.exists():
+    if use_cache and path.exists():
         try:
-            hit = json.loads(CLIMB_JSON.read_text(encoding="utf-8"))
+            hit = json.loads(path.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
             hit = None
     if (hit and hit.get("cycles") == cycles and hit.get("base") == base
             and hit.get("params") == list(PLAN_FINGERPRINT) and hit.get("state") == key):
-        print(f"  爬梯段读缓存（{len(hit['segments'])} 段，同一实测状态，不重算）", flush=True)
-        return segs_load(hit["segments"]), [], ["（爬梯段读自缓存）"]
-    print("  按实测位姿重规划爬梯段……（一次几分钟，跑完会缓存，下次就不用等）", flush=True)
+        print(f"  {label}读缓存（{len(hit['segments'])} 段，同一实测状态，不重算）", flush=True)
+        return segs_load(hit["segments"]), [], [f"（{label}读自缓存）"]
+    print(f"  按实测位姿重规划{label}……（跑完会缓存，下次就不用等）", flush=True)
     t0 = time.perf_counter()
-    c_segs, c_steps, c_notes, _ = build(rig, fg, cycles, base, state=st)
-    print(f"  规划完成：{len(c_segs) if c_segs else 0} 段，用时 {time.perf_counter() - t0:.0f} s",
+    segs, steps, notes, _ = build(rig, fg, cycles, base, state=st, **build_kw)
+    print(f"  {label}规划完成：{len(segs) if segs else 0} 段，用时 {time.perf_counter() - t0:.0f} s",
           flush=True)
-    if c_segs is not None:
-        CLIMB_JSON.write_text(json.dumps({"cycles": cycles, "base": base,
-                                          "params": list(PLAN_FINGERPRINT), "state": key,
-                                          "segments": segs_dump(c_segs)}, ensure_ascii=False),
-                              encoding="utf-8")
-    return c_segs, c_steps, c_notes
+    if segs is not None:
+        path.write_text(json.dumps({"cycles": cycles, "base": base,
+                                    "params": list(PLAN_FINGERPRINT), "state": key,
+                                    "segments": segs_dump(segs)}, ensure_ascii=False),
+                        encoding="utf-8")
+    return segs, steps, notes
+
+
+def plan_climb(rig: G.Rig, fg, cycles: int, base: int, st: dict, use_cache: bool = True):
+    """爬梯段（14 步）：按实测状态规划 + 缓存。"""
+    return cached_plan(CLIMB_JSON, rig, fg, cycles, base, st, "爬梯段", {}, use_cache)
+
+
+def plan_entry(rig: G.Rig, fg, cycles: int, base: int, st: dict, use_cache: bool = True):
+    """入口段（6 步）：按实测状态规划 + 缓存（走过来的落点和名义站姿差几厘米时用）。"""
+    return cached_plan(ENTRY_JSON, rig, fg, cycles, base, st, "入口段",
+                       {"entry": True, "only_entry": True}, use_cache)
 
 
 def level_of(rig: G.Rig, z: float, x: float) -> str:
@@ -691,6 +825,212 @@ def run_two_phase(rig: G.Rig, fg, cycles: int, base: int, servo: float,
             e_segs + c_segs, n_entry)
 
 
+# ================================================================ 完整作业流（--demo）
+# 平地起步 → 自主走到楼梯口 → 按实测重规划入场 → 20 步爬梯 → 登顶站直 → 平台上前走几步。
+# 四段都走 build()：走近段 / 平台段是"平地上的四拍走"（腿落点 = 自己原位 + 步幅，
+# 机身锚点取剩下三足的内切圆心、俯仰压到 10° 以内）；入口段 / 爬梯段仍是细网格位姿搜索 +
+# 按实测位姿重规划 + 缓存。参数见文件开头「完整作业流的参数」。
+OUT_COURSE = ROOT / "experiments" / "b2" / "b2_full_course.txt"
+OUT_COURSE_JSON = ROOT / "experiments" / "b2" / "b2_full_course.json"
+
+
+def approach_plan(rig: G.Rig, fg, use_cache: bool = True):
+    """前置阶段：从楼梯口后方的正常站姿，走到入口起点（名义平地站姿，机身 x = GROUND_X）。
+
+    起点是固定的，所以「实测状态」就是名义起点站姿；缓存键因此也是固定的（改了参数会自动失效）。
+    """
+    feet, body = approach_stance(rig)
+    st0 = {"body": body, "feet": {leg: tuple(v) for leg, v in feet.items()}}
+    return cached_plan(APPROACH_JSON, rig, fg, APPROACH_CYCLES, 0, st0, "走近段",
+                       {"approach": True, "only_approach": True}, use_cache)
+
+
+def platform_plan(rig: G.Rig, fg, st: dict, use_cache: bool = True):
+    """后置阶段：登顶后先站直（恢复平地站姿），再用同一套四拍在平台上往前走。
+
+    起点是登顶后的实测状态，所以缓存键跟着实测状态走（和入口段/爬梯段同一个机制）。
+    """
+    return cached_plan(PLATFORM_JSON, rig, fg, PLAT_CYCLES, 0, st, "平台段",
+                       {"platform": True, "only_platform": True}, use_cache)
+
+def demo_plans(rig: G.Rig, fg, cycles: int, base: int, use_cache: bool = True):
+    """把整条作业流的四段计划预先算好（不开窗口、也不播画面）。
+
+    为什么要先"空跑"一遍：入口段和爬梯段都要按**实测**位姿重规划，而实测位姿只有真的跑过
+    才有。这里先在无窗口状态下把整条流程跑一遍拿到各阶段切换时的真实状态，规划好四段；
+    播画面时从起点重跑，物理是确定性的，所以这些计划照样成立（每段切换处还会核对偏差）。
+    顺序：走近(解析) → 实测量 → 入口(搜) → 实测量 → 爬梯(搜+缓存) → 实测量 → 站直+平台走(解析)。
+    """
+    servo = 1.2
+    a_segs, a_steps, a_notes = approach_plan(rig, fg)
+    G.run_plan(rig, a_segs, fg, body_servo=servo)
+    st1 = read_state(rig, fg)
+    e_segs, e_steps, e_notes = plan_entry(rig, fg, cycles, base, st1, use_cache)
+    if e_segs is None:
+        return None, ["入口段按实测重规划失败：" + str(e_notes)], [st1]
+    G.run_plan(rig, e_segs, fg, body_servo=servo, reset=False)
+    st2 = read_state(rig, fg)
+    c_segs, c_steps, c_notes = plan_climb(rig, fg, cycles, base, st2, use_cache)
+    if c_segs is None:
+        return None, ["爬梯段按实测重规划失败：" + str(c_notes)], [st1, st2]
+    G.run_plan(rig, c_segs, fg, body_servo=servo, reset=False)
+    st3 = read_state(rig, fg)
+    p_segs, p_steps, p_notes = platform_plan(rig, fg, st3)
+    phases = [("平地走近", a_segs, a_steps, a_notes),
+              ("按实测重规划入口", e_segs, e_steps, e_notes),
+              ("爬梯（20 步核心）", c_segs, c_steps, c_notes),
+              ("登顶站直 + 平台前行", p_segs, p_steps, p_notes)]
+    return phases, [st1, st2, st3], None
+
+
+def run_demo_flow(rig: G.Rig, fg, phases, servo: float, hook=None, sync=None,
+                  expect=None):
+    """按顺序跑四段（第一段重置到起点，后面的段不重置接着跑），返回合并结果。
+
+    expect：规划时用到的三个实测状态；每段跑完都核对一次偏差，>2 cm 就明说
+    （播画面时不再现场重规划，避免窗口卡住，但会提示哪一段的前提不成立了）。
+    """
+    res = None
+    segs_all: list = []
+    steps_all: list = []
+    notes_all: list = []
+    state_after: list = []
+    for i, (name, segs, steps, notes) in enumerate(phases):
+        r = G.run_plan(rig, segs, fg, hook=hook, body_servo=servo, sync=sync, reset=(i == 0))
+        state_after.append(read_state(rig, fg))
+        res = r if res is None else merge_res(res, r)
+        segs_all += list(segs)
+        steps_all += list(steps)
+        notes_all += list(notes)
+        print(f"  {name}：{len(r['beats'])} 步，机身 x {r['x']:+.3f} z {r['z']:.3f}"
+              + ("（失稳：" + str(r["failed_at"]) + "）" if r["fell"] else ""), flush=True)
+        if r["fell"]:
+            break
+    if expect:
+        for k, (a, b) in enumerate(zip(expect, state_after)):
+            if k >= len(state_after) - 1:
+                break
+            dev = max(abs(x - y) for x, y in zip(state_key(a), state_key(b)))
+            if dev > 0.02:
+                print(f"  ⚠ 第 {k+1} 段结束时与预演差 {dev*1000:.0f} mm（该段之后的计划前提已变）",
+                      flush=True)
+    return res, steps_all, notes_all, segs_all
+
+
+def view_demo(rig: G.Rig, fg, phases, cycles: int, base: int) -> int:
+    """3D 播放完整作业流：先规划（不开窗口），再一路不停地播完四段。"""
+    import mujoco.viewer
+
+    hz = 25.0 if "--slow" in sys.argv[1:] else 50.0
+    model, data = rig.model, rig.data
+    counts = [len([x for x in segs if x.lift]) for _, segs, _, _ in phases]
+    n_lift = sum(counts)
+    print(f"  播放（{hz/50:.1f} 倍速）：{n_lift} 步 = 走近 {counts[0]} + 入口 {counts[1]} + "
+          f"爬梯 {counts[2]} + 平台 {counts[3]}，四段之间不停", flush=True)
+    with mujoco.viewer.launch_passive(model, data, show_left_ui=False,
+                                      show_right_ui=False) as viewer:
+        viewer.opt.geomgroup[3] = 1
+        viewer.cam.lookat[:] = (0.55, G.BODY_Y, 0.40)
+        viewer.cam.distance = 2.6
+        viewer.cam.azimuth = 72.0
+        viewer.cam.elevation = -8.0
+
+        def follow():
+            viewer.cam.lookat[:] = (float(data.qpos[0]) + 0.05, G.BODY_Y,
+                                    float(data.qpos[2]) - 0.12)
+
+        sync = G.pacer(viewer, on_frame=follow, hz=hz)
+        res, _, _, _ = run_demo_flow(rig, fg, phases, 1.2, sync=sync)
+        print(f"  结果：走通 {len(res['beats'])}/{n_lift} 步，"
+              f"{'在 ' + str(res['failed_at']) + ' 失稳' if res['fell'] else '全程未失稳'}"
+              f"，末态机身 x {res['x']:+.3f} z {res['z']:.3f}"
+              + ("，四足都在平台上" if not res["fell"] else ""), flush=True)
+        G.hold_open(viewer)
+    return 0
+
+
+def demo_main(rig: G.Rig, fg, cycles: int, base: int, argv) -> int:
+    """--demo：完整作业流。数据模式写 b2_full_course.txt/.json；带 --view 则只播放。"""
+    phases, states, err = demo_plans(rig, fg, cycles, base)
+    if phases is None:
+        print(err)
+        return 1
+    if "--view" in argv:
+        return view_demo(rig, fg, phases, cycles, base)
+    servo = float(argv[argv.index("--servo") + 1]) if "--servo" in argv else 1.2
+    log = ContactLog(rig, fg)
+    res, steps, notes, run_segs = run_demo_flow(rig, fg, phases, servo, hook=log, expect=states)
+    total = len([x for x in run_segs if x.lift])
+    counts = [len([x for x in s if x.lift]) for _, s, _, _ in phases]
+    lines: list[str] = []
+
+    def say(t: str = "") -> None:
+        lines.append(t)
+
+    say("=" * 108)
+    say("B2 完整作业流：平地起步 → 自主走到楼梯口 → 按实测重规划入场 → 20 步爬梯 → 登顶站直 → 平台前行")
+    say("=" * 108)
+    for name, segs, steps, notes_ in phases:
+        lift = [x for x in segs if x.lift]
+        b0 = segs[0].body_a
+        b1 = segs[-1].body_b
+        say(f"  {name:<18} {len(lift):>2} 步   机身 x {b0[0]:+.3f} → {b1[0]:+.3f}   "
+            f"z {b0[2]:.3f} → {b1[2]:.3f}   pitch {math.degrees(b0[3]):+.1f}° → {math.degrees(b1[3]):+.1f}°")
+    say()
+    for n in notes:
+        say(f"  · {n}")
+    say()
+    say(f"  实测（PD 800/20 + 机身位姿伺服 k={servo}；每步 挪重心 {SHIFT_S} s → 抬腿 {LIFT_S} s → "
+        f"落定 {SETTLE_S} s；抬脚离目标 {SWING_CLEAR*100:.0f} cm）：")
+    say(f"    {'步骤':<8}{'抬脚高度':>9}{'机身下沉':>9}{'打滑':>8}{'力矩峰值':>9}{'倾角':>6}   四足所在级（实测）")
+    lift_segs = [x for x in run_segs if x.lift]
+    for k, b in enumerate(res["beats"]):
+        lvs = " ".join(f"{l}{level_of(rig, b['feet_z'][l], b['feet_x'][l])}" for l in G.LEGS)
+        say(f"    {b['name']:<8}{b.get('lift', 0)*1000:8.0f}mm{b['sink']*1000:+8.0f}mm"
+            f"{b['slip_mm']:7.1f}mm{b.get('peak', 0)*100:8.0f}%{b['tilt']:5.0f}°   {lvs}")
+    say(f"    走通 {len(res['beats'])}/{total} 步；"
+        f"{'在【' + str(res['failed_at']) + '】失去稳定' if res['fell'] else '全程未失稳'}")
+    say(f"    峰值：{res['peak_act']} 占额 {res['peak_tau']*100:.0f}%；最大倾角 {res['max_tilt']:.0f}°")
+    final = None
+    if not res["fell"]:
+        body_f = tuple(run_segs[-1].body_b)
+        feet_f = dict(run_segs[-1].feet_b)
+        h = G.hold(rig, fg, feet_f, body_f, 2.0)
+        cmap = contact_map(rig, fg)
+        on_plat = {leg: any(nm == "platform" for nm, _ in cmap.get(leg, [])) for leg in G.LEGS}
+        final = {"hold": h, "contact": {k: [[nm, round(n, 1)] for nm, n in v] for k, v in cmap.items()},
+                 "on_platform": on_plat}
+        say()
+        say("  末态核验（原地静置 2 s，读 contact 里真实生效的 geom 与法向力）：")
+        say(f"    机身 ({body_f[0]:.3f}, {body_f[1]:.3f}, {body_f[2]:.3f})  pitch {math.degrees(body_f[3]):+.1f}°"
+            f"（平台顶 {LEVEL_TOP[TOP_LEVEL]:.3f} + 站高 {PLAT_STAND_OFF:.3f}；比平地站高 {GROUND_Z:.3f} 低 "
+                f"{(GROUND_Z - PLAT_STAND_OFF)*100:.0f} cm —— 为了在漂移后的站姿上还有横向修正余量）")
+        if h is not None:
+            say(f"    静置：Δx {h['dx']*1000:+.0f} / Δy {h['dy']*1000:+.0f} / Δz {h['dz']*1000:+.0f} mm，"
+                f"倾角 {h['tilt']:.1f}°，打滑 {h['slip_mm']:.1f} mm，力矩峰值 {h['peak_tau']*100:.0f}%，"
+                f"{'未倾覆' if h['tilt'] < 20 else '有倾覆风险'}")
+        say("    四足接触：" + "  ".join(
+            f"{leg}→{'/'.join(f'{nm} {n:.0f}N' for nm, n in cmap.get(leg, [])) or '无'}" for leg in G.LEGS))
+        say("    四足都在平台（platform geom）上：" + ("是" if all(on_plat.values()) else "否"))
+    say()
+    ok = (not res["fell"]) and len(res["beats"]) == total
+    n_plat = total - 28
+    say(f"  结论：{'四段全通、' if ok else ''}{total} 步走通"
+        f"（走近 {counts[0]} + 入口 {counts[1]} + 爬梯 {counts[2]} + 平台 {n_plat}），"
+        f"机身 x {res['x']:+.3f}、z {res['z']:.3f}；峰值力矩 {res['peak_tau']*100:.0f}%（{res['peak_act']}）")
+    text = "\n".join(lines)
+    OUT_COURSE.write_text(text + "\n", encoding="utf-8")
+    OUT_COURSE_JSON.write_text(json.dumps(
+        {"phases": [{"name": n, "steps": len([x for x in s if x.lift]),
+                     "body_a": list(s[0].body_a), "body_b": list(s[-1].body_b)} for n, s, _, _ in phases],
+         "steps": steps, "notes": notes, "final": final,
+         "result": {k: v for k, v in res.items() if k != "beats"}, "beats": res["beats"]},
+        ensure_ascii=False, indent=2), encoding="utf-8")
+    print(text)
+    print("WROTE", OUT_COURSE)
+    return 0
+
+
 def main() -> int:
     argv = sys.argv[1:]
     entry = "--no-entry" not in argv            # 默认从平地正常站姿起步（多 7 步进入标准状态）
@@ -698,6 +1038,9 @@ def main() -> int:
     cycles = int(argv[argv.index("--cycles") + 1]) if "--cycles" in argv else 4
     rig = G.load_rig("b2")
     fg = G.foot_gids(rig)
+    if "--demo" in argv:
+        # 完整作业流：走近 → 入口 → 爬梯 → 平台前行（自己规划、自己的报告，不复用下面的名义计划）
+        return demo_main(rig, fg, cycles, base, argv)
     cached = None if ("--rebuild" in argv or "--plan" in argv) else load_plan(cycles, base, entry)
     if cached is not None:
         print(f"读缓存计划（{len(cached)} 段）；要重算加 --rebuild")

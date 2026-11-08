@@ -49,7 +49,9 @@
 
 | 文件 | 作用 |
 |---|---|
-| `experiments/b2/b2_follow_gait.py` | 主脚本：入口/爬梯计划生成、两段式执行、报告与出图 |
+| `experiments/b2/b2_follow_gait.py` | 主脚本：入口/爬梯计划生成、两段式执行、报告与出图；`--demo` = 完整作业流（走近→入口→爬梯→平台前行） |
+| `experiments/b2/b2_follow_gait_plan*.json` | 四段规划缓存：`approach` / `entry` / `climb` / `platform`（各按「实测状态 + 参数指纹」缓存） |
+| `experiments/b2/b2_full_course.{txt,json}` | `--demo` 的产物：四段汇总 + 36 拍实测数据 + 末态核验 |
 | `experiments/feasibility/three_robot_gait_0272.py` | 公共工具：`load_rig` / `legs_ik` / PD 循环 `Loop` / `run_plan` / `pacer` / `hold` |
 | `experiments/b2/b2_diag_stance.py` | 位姿枚举 `enumerate_poses`、非足端避碰 `filter_clear`、PD 静置 |
 | `simulations/mujoco/b2_stairs_static/scene.xml` | 场景入口（include B2 官方 MJCF + 钢梯） |
@@ -60,8 +62,9 @@
 - 🔴 **公开前必查**：见页首红线 —— 个人信息、内部文档、凭证、本机数据（含**全历史**）扫描通过后，
   才允许转 public 或推到公开远端。**任何**拿不准的内容先报给用户，不要自行判断“无害”。
 - `models/`（72 文件 / 88.6 MB）：B2、Go2、AS2 官方模型与钢梯资产 —— **一个都不要删**。
-- `experiments/b2/b2_follow_gait_plan.json`、`b2_follow_gait_plan_climb.json`：规划缓存（65 KB）。
-  它们让 `--view` 1.4 s 起播；删了首次运行要重算 6–7 分钟。改了任何规划参数会自动失效并重算。
+- `experiments/b2/b2_follow_gait_plan*.json`（四个：`approach`/`entry`/`climb`/`platform`，共约 78 KB）：
+  规划缓存。它们让 `--demo --view` 2.4 s 起播、`--demo` 跑数据 7 s；删了首次运行要重算
+  （走近/平台各约 25/10 s，入口 17 s，爬梯 6–7 min）。改了任何规划参数会自动失效并重算。
 - `experiments/b2/b2_follow_gait_trace*.txt`：两次失败的时间历程，文档 §5 失败档案引用的证据。
 - **已验证段落的规划参数不要动**：`PITCH_HI`、`WIN_X/WIN_Z`、`EDGE`、`SHIFT_S/LIFT_S/SETTLE_S`、`PLAT_*`、
   `GROUND_*` 都是逐步试出来的；改 2–4 cm 就会把整条跑通的轨迹改坏（实测 14/14 → 2/14）。
