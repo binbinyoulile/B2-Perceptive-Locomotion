@@ -862,7 +862,7 @@ def main() -> int:
     print(text)
     print("WROTE", OUT_TXT)
     if "--png" in argv:
-        render(rig, fg, segs, steps, res, servo)
+        render(rig, fg, run_segs, steps, res, servo)   # 实际跑的那套段（两段式），不是名义计划
     return 0
 
 
@@ -895,7 +895,9 @@ def render(rig: G.Rig, fg, segs, steps, res, servo: float = 1.2, picks=None) -> 
     # 起步那一帧要先把机器人摆到起步姿态（否则拍到的是 MJCF 默认位，不是这条轨迹的起点）
     j0, _ = G.legs_ik(rig, segs[0].body_a, segs[0].feet_a)
     G.set_pose(rig, data, segs[0].body_a, j0)
-    snap("起步：FL2 / FR1 / RR1 / RL0", (0.42, G.BODY_Y, 0.60))
+    flat = max(v[2] for v in segs[0].feet_a.values()) < rig.r + PRELOAD + 0.05
+    snap("起步：四足在地面（平地站姿）" if flat else "起步：FL2 / FR1 / RR1 / RL0",
+         (0.42, G.BODY_Y, 0.60))
 
     def hook(seg, u):
         if seg.name.startswith("落定") and u > 0.97:

@@ -16,7 +16,7 @@ experiments/checkpoints/*
 !experiments/checkpoints/ppo_fsm_residual_50k/
 !experiments/checkpoints/ppo_fsm_residual_50k/ppo_fsm_residual_50k_latest.zip
 
-# Large/generated media
+# Large/generated media（体积大、可重建）
 *.mp4
 *.avi
 *.mov
@@ -24,9 +24,17 @@ experiments/checkpoints/*
 *.log
 tensorboard/
 wandb/
+*-pages/
 
 # 本机记忆库（meow-memory 工作区数据，不属于项目源码，也不应跨机器传播）
 .dsh-meow/
+
+# 注：以下两个是**规划缓存**，故意纳入版本管理（总共 67 KB）——
+# 它们是 `--view` 1.4 s 起播的关键，删了要重算 6–7 分钟：
+#   experiments/b2/b2_follow_gait_plan.json         完整 20 步计划
+#   experiments/b2/b2_follow_gait_plan_climb.json   按实测位姿重规划的爬梯段
+# 想不跟踪就在下面放开，同时接受首次运行要重新规划：
+# experiments/b2/b2_follow_gait_plan*.json
 
 # OS/editor
 .DS_Store
