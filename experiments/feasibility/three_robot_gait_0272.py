@@ -543,11 +543,17 @@ def hold(rig: Rig, fg, feet, body, seconds: float = 1.5):
             "ext": ext, "body": body}
 
 
-def run_plan(rig: Rig, segs: list[Seg], fg, sync=None, hook=None, body_servo: float = 0.0):
-    """按计划推进；一旦跌落就停在出错的那一段（继续推只会得到一堆地板数据）。"""
+def run_plan(rig: Rig, segs: list[Seg], fg, sync=None, hook=None, body_servo: float = 0.0,
+             reset: bool = True):
+    """按计划推进；一旦跌落就停在出错的那一段（继续推只会得到一堆地板数据）。
+
+    reset=False：不把机器人摆回 segs[0] 的位姿，直接从当前实测状态接着跑
+    （用于"一段跑完 → 读实测 → 重规划下一段 → 继续"的两段式流程）。
+    """
     model, data = rig.model, rig.data
     joints0, _ = legs_ik(rig, segs[0].body_a, segs[0].feet_a)
-    set_pose(rig, data, segs[0].body_a, joints0)
+    if reset:
+        set_pose(rig, data, segs[0].body_a, joints0)
     z_start = float(data.qpos[2])
     lp = Loop(rig)
     max_tilt = 0.0

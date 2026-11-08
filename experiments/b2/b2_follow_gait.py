@@ -224,13 +224,54 @@ def solve(rig: G.Rig, fg, feet, support, prev=None, tol: float = 0.030,
     return best
 
 
-def build(rig: G.Rig, fg, cycles: int, base: int = 0, entry: bool = False):
+def read_state(rig: G.Rig, fg) -> dict:
+    """实测状态：机身 (x, y, z, pitch) + 四足实际位置。两段式流程用它当第二段的起点。"""
+    d = rig.data
+    return {"body": (float(d.qpos[0]), float(d.qpos[1]), float(d.qpos[2]), G.pitch_of(d)),
+            "feet": {leg: tuple(float(v) for v in d.geom_xpos[g]) for leg, g in fg.items()}}
+
+
+def merge_res(a, b):
+    """合并两段的运行结果（入口段 + 重新规划后的爬梯段）。"""
+    if a is None:
+        return b
+    if b is None:
+        return a
+    out = dict(b)
+    out["beats"] = a["beats"] + b["beats"]
+    out["max_tilt"] = max(a["max_tilt"], b["max_tilt"])
+    out["sat_frac"] = max(a["sat_frac"], b["sat_frac"])
+    out["lift_m"] = {k: max(a["lift_m"][k], b["lift_m"][k]) for k in a["lift_m"]}
+    if a["peak_tau"] >= b["peak_tau"]:
+        out["peak_tau"], out["peak_act"] = a["peak_tau"], a["peak_act"]
+    out["fell"] = a["fell"] or b["fell"]
+    out["failed_at"] = a["failed_at"] or b["failed_at"]
+    return out
+
+
+def build(rig: G.Rig, fg, cycles: int, base: int = 0, entry: bool = False,
+          only_entry: bool = False, state: dict | None = None):
     """生成整条轨迹 + 每步的计划信息。返回 (segs, steps, notes, 末态 feet)。
 
     entry=True：从平地正常站姿起步，先走 7 步进入标准状态 S0，再接 base=0 的爬梯计划。
     entry=False：直接从 S0（楼梯上的错位姿态）起步 —— 就是之前验证过的那 14 步。
+    only_entry=True：只生成入口那一段（两段式流程的第一段）。
+    state=实测状态：按实测机身/足端位姿生成爬梯段（两段式流程的第二段，不再走入口）。
     """
-    if entry:
+    notes: list[str] = []
+    if state is not None:
+        # 两段式流程的第二段：入口已经跑完，按**实测**机身/足端位姿生成爬梯段。
+        # 不插"起步稳住"段（机器人已经在那儿了，不需要再摆一次）。
+        feet = {leg: tuple(state["feet"][leg]) for leg in G.LEGS}
+        levels0 = start_levels(base)
+        dev = max(max(abs(feet[leg][k] - foot_target(rig, leg, levels0[leg])[k]) for k in (0, 2))
+                  for leg in G.LEGS)
+        notes.append(f"按实测重规划爬梯段：实测落点与 S0 目标最大偏差 {dev*1000:.0f} mm")
+        body = {"body": tuple(state["body"])}
+        levels = dict(levels0)
+        segs, steps = [], []
+        cur = body
+    elif entry:
         feet, gbody = ground_stance(rig)
         joints, ext = G.legs_ik(rig, gbody, feet)
         if joints is None:
@@ -245,10 +286,11 @@ def build(rig: G.Rig, fg, cycles: int, base: int = 0, entry: bool = False):
         body = solve(rig, fg, feet, G.LEGS)
     if body is None:
         return None, [], ["起步姿态无可行解"], None
-    levels = start_levels(base)
-    segs = [G.Seg("起步稳住", 0.6, body["body"], body["body"], dict(feet), dict(feet))]
-    steps, notes = [], []
-    cur = body
+    if state is None:
+        levels = start_levels(base)
+        segs = [G.Seg("起步稳住", 0.6, body["body"], body["body"], dict(feet), dict(feet))]
+        steps = []
+        cur = body
 
     def solve_pair(new_feet: dict, support3: tuple, pitch_hi: float = PITCH_HI):
         """解"抬腿位姿"和"挪重心位姿"这一对。
@@ -356,6 +398,8 @@ def build(rig: G.Rig, fg, cycles: int, base: int = 0, entry: bool = False):
         dev = max(abs(feet[leg][0] - foot_target(rig, leg, levels[leg])[0]) for leg in G.LEGS)
         notes.append(f"进入标准状态：四足落点与 S0 的最大偏差 {dev*1000:.1f} mm"
                      + ("（已对齐，后续直接接爬梯计划）" if dev < 0.005 else "（偏差偏大，检查）"))
+        if only_entry:
+            return segs, steps, notes, feet
 
     adjusted = False
     for c in range(cycles):
@@ -577,7 +621,32 @@ def main() -> int:
 
     servo = float(argv[argv.index("--servo") + 1]) if "--servo" in argv else 1.2
     log = ContactLog(rig, fg)
-    res = G.run_plan(rig, segs, fg, hook=log, body_servo=servo)
+    res = None
+    run_segs, n_entry = segs, 0
+    if entry and "--one-phase" not in argv:
+        # 两段式：入口段跑完 → 读实测位姿 → 按实测重规划爬梯段 → 不重置地接着跑。
+        # 动机：同一套爬梯计划从标准状态直接起步是 14/14，从平地走完入口再跑就翻在第 18 步，
+        # 说明差的是"走路入场的动态历史"，那就让爬梯段按现实（而不是名义 S0）来规划。
+        e_segs, e_steps, e_notes, _ = build(rig, fg, cycles, base, entry=True, only_entry=True)
+        if e_segs is None:
+            print("入口规划失败：", e_notes)
+            return 1
+        res1 = G.run_plan(rig, e_segs, fg, hook=log, body_servo=servo)
+        if res1["fell"]:
+            res = res1
+            steps, notes = e_steps, e_notes
+        else:
+            st = read_state(rig, fg)
+            c_segs, c_steps, c_notes, c_feet = build(rig, fg, cycles, base, state=st)
+            if c_segs is None:
+                print("按实测重规划失败：", c_notes)
+                return 1
+            res2 = G.run_plan(rig, c_segs, fg, hook=log, body_servo=servo, reset=False)
+            res = merge_res(res1, res2)
+            steps, notes, final_feet = e_steps + c_steps, e_notes + c_notes, c_feet
+            run_segs, n_entry = e_segs + c_segs, len(e_steps)
+    if res is None:
+        res = G.run_plan(rig, segs, fg, hook=log, body_servo=servo)
     res0 = None
     if "--quick" not in argv:      # 纯开环对照（同样一条轨迹），翻倍耗时，赶时间时关掉
         rig0 = G.load_rig("b2")
@@ -615,7 +684,7 @@ def main() -> int:
         f"抬腿 {LIFT_S} s → 落定 {SETTLE_S} s；抬脚离目标 {SWING_CLEAR*100:.0f} cm）：")
     say(f"    {'步骤':<8}{'抬脚高度':>9}{'机身下沉':>9}{'打滑':>8}{'力矩峰值':>9}{'倾角':>6}"
         f"{'支撑腿最小力':>13}   {'四足所在级（实测）'}")
-    lift_segs = [x for x in segs if x.lift]     # beats 与抬腿段一一对应（都按顺序）
+    lift_segs = [x for x in run_segs if x.lift]  # beats 与抬腿段一一对应（两段式时用实际跑的段）
     for k, b in enumerate(res["beats"]):
         lvs = " ".join(f"{l}{level_of(rig, b['feet_z'][l], b['feet_x'][l])}" for l in G.LEGS)
         sl = log.of(lift_segs[k]) if k < len(lift_segs) else None
@@ -626,9 +695,9 @@ def main() -> int:
             f"{b['tilt']:5.0f}°{supp:11.0f}N   {lvs}")
     say(f"    最吃力的关节：{res['peak_act']}（峰值占额 {res['peak_tau']*100:.0f}%）")
     if res["beats"]:
-        say(f"    机身横向/朝向漂移：y {res['beats'][-1]['y']:.3f}"
-            f"（目标 {G.BODY_Y:.3f}）、yaw {res['beats'][-1]['yaw']:+.1f}°"
-            "（规划只管俯仰，yaw 没有闭环 —— 漂多了腿会一直较劲，FL_thigh 饱和就是这么来的）")
+        say(f"    机身横向/朝向：y {res['beats'][-1]['y']:.3f}"
+            f"（这一步的命令值本身含「挪重心」的横向偏置，不能直接和楼梯中线 {G.BODY_Y:.3f} 比）、"
+            f"yaw {res['beats'][-1]['yaw']:+.1f}°（规划只管俯仰，yaw 没有闭环）")
     say(f"    走通 {done}/{total} 步；"
         f"{'在【' + str(res['failed_at']) + '】失去稳定' if res['fell'] else '全程未失稳'}")
     say(f"    末态机身 x {res['x']:+.3f} z {res['z']:.3f}，最大倾角 {res['max_tilt']:.0f}°")
@@ -676,7 +745,7 @@ def main() -> int:
         say(f"  结论：{total} 步全部走通，四足全部落到平台（第 4 级，顶 0.788 m）："
             f"机身 {0.680:.3f} → {res['z']:.3f} m。"
             f"全程峰值力矩 {res['peak_tau']*100:.0f}%（{res['peak_act']}）—— 成功登上平台。"
-            + ("起步在平地上（走了 %d 步平地步 + %d 步爬梯）。" % (4, total - 4) if entry else ""))
+            + ("起步在平地上（%d 步入场 + %d 步爬梯）。" % (n_entry, total - n_entry) if entry and n_entry else ""))
     elif done >= 4:
         say()
         say(f"  结论：走到第 {done}/{total} 步（{res['failed_at']}）失稳，"
