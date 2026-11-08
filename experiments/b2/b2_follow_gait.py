@@ -552,6 +552,7 @@ CLIMB_JSON = ROOT / "experiments" / "b2" / "b2_follow_gait_plan_climb.json"
 ENTRY_JSON = ROOT / "experiments" / "b2" / "b2_follow_gait_plan_entry.json"
 APPROACH_JSON = ROOT / "experiments" / "b2" / "b2_follow_gait_plan_approach.json"
 PLATFORM_JSON = ROOT / "experiments" / "b2" / "b2_follow_gait_plan_platform.json"
+CLIMB_DEMO_JSON = ROOT / "experiments" / "b2" / "b2_follow_gait_plan_climb_demo.json"
 # 规划参数指纹：改了任何一个规划参数，爬梯段缓存自动失效（否则会悄悄复用手改参数之前的计划）
 PLAN_FINGERPRINT = (PITCH_HI, EDGE, PRELOAD, SWING_CLEAR, EXT_CAP, WIN_X, WIN_Z,
                     SHIFT_S, LIFT_S, SETTLE_S, PLAT_FRONT, PLAT_REAR, PLAT_ADJ,
@@ -870,7 +871,9 @@ def demo_plans(rig: G.Rig, fg, cycles: int, base: int, use_cache: bool = True):
         return None, ["入口段按实测重规划失败：" + str(e_notes)], [st1]
     G.run_plan(rig, e_segs, fg, body_servo=servo, reset=False)
     st2 = read_state(rig, fg)
-    c_segs, c_steps, c_notes = plan_climb(rig, fg, cycles, base, st2, use_cache)
+    # 用单独一份缓存：作业流的入口结束状态和「平地起步 20 步」那条路不同，共用一份会互相擦掉（每次都要重算 6 分钟）
+    c_segs, c_steps, c_notes = cached_plan(CLIMB_DEMO_JSON, rig, fg, cycles, base, st2,
+                                          "爬梯段", {}, use_cache)
     if c_segs is None:
         return None, ["爬梯段按实测重规划失败：" + str(c_notes)], [st1, st2]
     G.run_plan(rig, c_segs, fg, body_servo=servo, reset=False)
