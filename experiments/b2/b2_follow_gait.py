@@ -32,7 +32,7 @@
 运行：
     D:\\Python313\\python.exe .\\experiments\\b2\\b2_follow_gait.py          （默认 4 循环 = 12 步上平台）
     D:\\Python313\\python.exe .\\experiments\\b2\\b2_follow_gait.py --cycles 2
-    D:\\Python313\\python.exe .\\experiments\\b2\\b2_follow_gait.py --view   （读缓存，0.5 倍速）
+    D:\\Python313\\python.exe .\\experiments\\b2\\b2_follow_gait.py --view   （实时播放；--slow = 0.5 倍速）
     D:\\Python313\\python.exe .\\experiments\\b2\\b2_follow_gait.py --png
 
 关键假设：
@@ -434,30 +434,85 @@ def build(rig: G.Rig, fg, cycles: int, base: int = 0, entry: bool = False,
 
 
 PLAN_JSON = ROOT / "experiments" / "b2" / "b2_follow_gait_plan.json"
+CLIMB_JSON = ROOT / "experiments" / "b2" / "b2_follow_gait_plan_climb.json"
+# 规划参数指纹：改了任何一个规划参数，爬梯段缓存自动失效（否则会悄悄复用手改参数之前的计划）
+PLAN_FINGERPRINT = (PITCH_HI, EDGE, PRELOAD, SWING_CLEAR, EXT_CAP, WIN_X, WIN_Z,
+                    SHIFT_S, LIFT_S, SETTLE_S, PLAT_FRONT, PLAT_REAR, PLAT_ADJ,
+                    GROUND_X, GROUND_Z, GROUND_FRONT, GROUND_REAR)
+
+
+def segs_dump(segs) -> list[dict]:
+    return [{"name": s.name, "dur": s.dur, "body_a": list(s.body_a), "body_b": list(s.body_b),
+             "feet_a": {k: list(v) for k, v in s.feet_a.items()},
+             "feet_b": {k: list(v) for k, v in s.feet_b.items()},
+             "lift": s.lift, "z_clear": s.z_clear} for s in segs]
+
+
+def segs_load(items) -> list:
+    return [G.Seg(s["name"], s["dur"], tuple(s["body_a"]), tuple(s["body_b"]),
+                  {k: tuple(v) for k, v in s["feet_a"].items()},
+                  {k: tuple(v) for k, v in s["feet_b"].items()},
+                  lift=s["lift"], z_clear=s["z_clear"]) for s in items]
 
 
 def save_plan(segs, steps, cycles: int, base: int = 0, entry: bool = False) -> None:
-    data = {"cycles": cycles, "base": base, "entry": entry, "segments": [
-        {"name": s.name, "dur": s.dur, "body_a": list(s.body_a), "body_b": list(s.body_b),
-         "feet_a": {k: list(v) for k, v in s.feet_a.items()},
-         "feet_b": {k: list(v) for k, v in s.feet_b.items()},
-         "lift": s.lift, "z_clear": s.z_clear} for s in segs]}
-    PLAN_JSON.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    PLAN_JSON.write_text(json.dumps({"cycles": cycles, "base": base, "entry": entry,
+                                     "params": list(PLAN_FINGERPRINT),
+                                     "segments": segs_dump(segs)}, ensure_ascii=False),
+                         encoding="utf-8")
 
 
 def load_plan(cycles: int, base: int = 0, entry: bool = False):
-    """读缓存的计划；没有、或循环数/基准/是否平地起步对不上就返回 None。"""
+    """读缓存的计划；没有、循环数/基准/是否平地起步对不上、或规划参数改过就返回 None。"""
     if not PLAN_JSON.exists():
         return None
     data = json.loads(PLAN_JSON.read_text(encoding="utf-8"))
     if (data.get("cycles") != cycles or data.get("base", 0) != base
-            or bool(data.get("entry", False)) != entry):
+            or bool(data.get("entry", False)) != entry
+            or data.get("params") != list(PLAN_FINGERPRINT)):
         return None
-    segs = [G.Seg(s["name"], s["dur"], tuple(s["body_a"]), tuple(s["body_b"]),
-                  {k: tuple(v) for k, v in s["feet_a"].items()},
-                  {k: tuple(v) for k, v in s["feet_b"].items()},
-                  lift=s["lift"], z_clear=s["z_clear"]) for s in data["segments"]]
-    return segs
+    return segs_load(data["segments"])
+
+
+def entry_part(rig: G.Rig, fg, cycles: int, base: int = 0, segs=None):
+    """入口段（平地起步那 7 段）：能从完整计划里截出来就别重算 —— 重算要十几秒，
+    而且入口计划和爬梯计划里的入口部分本来就是同一段代码生成的。"""
+    for i, s in enumerate(segs or []):
+        if s.name == "进入后对齐S0":
+            return list(segs[:i + 1])
+    return build(rig, fg, cycles, base, entry=True, only_entry=True)[0]
+
+
+def plan_climb(rig: G.Rig, fg, cycles: int, base: int, st: dict, use_cache: bool = True):
+    """按实测状态规划爬梯段，同样的实测状态直接复用上次结果。
+
+    为什么要缓存：这一段（14 步的位姿搜索）是一次几分钟的计算，以前是入口走完才开始算，
+    于是 --view 里机器狗在窗前站着不动好几分钟 —— 看着像卡死，其实在规划。
+    现在规划全部放在开窗口之前，而且第二次跑同样状态就是读缓存、几乎不等。
+    """
+    key = [round(v, 3) for v in st["body"]] + [
+        round(c, 3) for leg in G.LEGS for c in st["feet"][leg]]
+    hit = None
+    if use_cache and CLIMB_JSON.exists():
+        try:
+            hit = json.loads(CLIMB_JSON.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            hit = None
+    if (hit and hit.get("cycles") == cycles and hit.get("base") == base
+            and hit.get("params") == list(PLAN_FINGERPRINT) and hit.get("state") == key):
+        print(f"  爬梯段读缓存（{len(hit['segments'])} 段，同一实测状态，不重算）", flush=True)
+        return segs_load(hit["segments"]), [], ["（爬梯段读自缓存）"]
+    print("  按实测位姿重规划爬梯段……（一次几分钟，跑完会缓存，下次就不用等）", flush=True)
+    t0 = time.perf_counter()
+    c_segs, c_steps, c_notes, _ = build(rig, fg, cycles, base, state=st)
+    print(f"  规划完成：{len(c_segs) if c_segs else 0} 段，用时 {time.perf_counter() - t0:.0f} s",
+          flush=True)
+    if c_segs is not None:
+        CLIMB_JSON.write_text(json.dumps({"cycles": cycles, "base": base,
+                                          "params": list(PLAN_FINGERPRINT), "state": key,
+                                          "segments": segs_dump(c_segs)}, ensure_ascii=False),
+                              encoding="utf-8")
+    return c_segs, c_steps, c_notes
 
 
 def level_of(rig: G.Rig, z: float, x: float) -> str:
@@ -594,28 +649,46 @@ def plan_table(steps, notes, total: int, cycles: int) -> list[str]:
 
 
 def run_two_phase(rig: G.Rig, fg, cycles: int, base: int, servo: float,
-                  hook=None, sync=None):
+                  hook=None, sync=None, plans=None, segs=None, steps=None,
+                  rebuild: bool = False):
     """两段式跑法：入口段 → 读实测位姿 → 按实测重规划爬梯段 → 不重置地接着跑。
 
     返回 (合并结果, 全部步骤, 全部说明, 实际跑的段, 入口步数)；失败时返回已完成的那部分。
     这是 20/20 能走通的关键：入口结束时足端与标准状态目标差 46 mm，
     不分段的话爬梯段每一拍的位姿都和现实不自洽（实测只有 17/20）。
+
+    plans=(入口段, 爬梯段, 规划用的实测状态)：两段都预先规划好了（--view 在开窗口前先做），
+    这时不再现场规划 —— 中途规划会让窗口停住好几分钟。
+    segs=完整计划：入口段直接从里面截，省一次重算。
     """
-    e_segs, e_steps, e_notes, _ = build(rig, fg, cycles, base, entry=True, only_entry=True)
-    if e_segs is None:
-        print("入口规划失败：", e_notes)
-        return None, [], e_notes, [], 0
+    n_entry = len(entry_spec(rig))
+    e_steps = list(steps[:n_entry]) if steps else []
+    e_notes = ["（入口段读自缓存/完整计划）"] if not e_steps else []
+    c_steps, c_notes = [], []
+    if plans is not None:
+        e_segs, c_segs, st = plans
+    else:
+        e_segs = entry_part(rig, fg, cycles, base, segs)
     res1 = G.run_plan(rig, e_segs, fg, hook=hook, body_servo=servo, sync=sync)
     if res1["fell"]:
-        return res1, e_steps, e_notes, e_segs, len(e_steps)
-    st = read_state(rig, fg)
-    c_segs, c_steps, c_notes, _ = build(rig, fg, cycles, base, state=st)
+        return res1, e_steps, e_notes, e_segs, n_entry
+    if plans is not None:
+        # 预演与实播是同一条确定性轨迹，理论上一致；差得多说明计划的前提不成立，按实测重规划
+        st2 = read_state(rig, fg)
+        a = list(st["body"]) + [c for leg in G.LEGS for c in st["feet"][leg]]
+        b = list(st2["body"]) + [c for leg in G.LEGS for c in st2["feet"][leg]]
+        dev = max(abs(x - y) for x, y in zip(a, b))
+        if dev > 0.02:
+            print(f"  ⚠ 入口落点与预演差 {dev * 1000:.0f} mm，按实测重新规划爬梯段", flush=True)
+            c_segs, c_steps, c_notes = plan_climb(rig, fg, cycles, base, st2, use_cache=not rebuild)
+    else:
+        c_segs, c_steps, c_notes = plan_climb(rig, fg, cycles, base, read_state(rig, fg), use_cache=not rebuild)
     if c_segs is None:
         print("按实测重规划爬梯段失败：", c_notes)
-        return res1, e_steps, e_notes + c_notes, e_segs, len(e_steps)
+        return res1, e_steps, e_notes + c_notes, e_segs, n_entry
     res2 = G.run_plan(rig, c_segs, fg, hook=hook, body_servo=servo, sync=sync, reset=False)
     return (merge_res(res1, res2), e_steps + c_steps, e_notes + c_notes,
-            e_segs + c_segs, len(e_steps))
+            e_segs + c_segs, n_entry)
 
 
 def main() -> int:
@@ -625,13 +698,12 @@ def main() -> int:
     cycles = int(argv[argv.index("--cycles") + 1]) if "--cycles" in argv else 4
     rig = G.load_rig("b2")
     fg = G.foot_gids(rig)
-    cached = (None if ("--rebuild" in argv or "--plan" in argv or "--view" not in argv)
-              else load_plan(cycles, base, entry))
+    cached = None if ("--rebuild" in argv or "--plan" in argv) else load_plan(cycles, base, entry)
     if cached is not None:
         print(f"读缓存计划（{len(cached)} 段）；要重算加 --rebuild")
-        segs, steps, notes, final_feet = cached, [], ["（读自缓存，规划表见上一次输出）"], None
+        segs, steps, notes = cached, [], ["（读自缓存，规划表见上一次输出）"]
     else:
-        segs, steps, notes, final_feet = build(rig, fg, cycles, base, entry=entry)
+        segs, steps, notes, _ = build(rig, fg, cycles, base, entry=entry)
         if segs is not None:
             save_plan(segs, steps, cycles, base, entry)
     if segs is None:
@@ -651,7 +723,8 @@ def main() -> int:
     if entry and "--one-phase" not in argv:
         # 两段式：入口跑完 → 读实测位姿 → 按实测重规划爬梯段 → 不重置接着跑（--one-phase 做对照）
         res, steps, notes, run_segs, n_entry = run_two_phase(
-            rig, fg, cycles, base, servo, hook=log)
+            rig, fg, cycles, base, servo, hook=log, segs=segs, steps=steps,
+            rebuild="--rebuild" in argv)
         if res is None:
             return 1
     if res is None:
@@ -686,8 +759,13 @@ def main() -> int:
         say("  起步：" + "  ".join(f"{l} {lname(lv[l])}" for l in G.LEGS))
     say("  每循环四步：FR +1（与 FL 汇合）/ RL +1（与 RR 汇合）/ FL +1 / RR +1（与 FR 汇合）")
     say()
-    for line in plan_table(steps, notes, total, cycles):
-        say(line)
+    if steps:
+        for line in plan_table(steps, notes, total, cycles):
+            say(line)
+    else:
+        say(f"  规划：{total} 步计划读自缓存（规划表见上一次输出）；要重排加 --rebuild")
+        for n in notes:
+            say(f"    · {n}")
     say()
     say(f"  实测（PD 800/20 + 机身位姿伺服 k={servo}，每步：挪重心 {SHIFT_S} s → "
         f"抬腿 {LIFT_S} s → 落定 {SETTLE_S} s；抬脚离目标 {SWING_CLEAR*100:.0f} cm）：")
@@ -727,8 +805,10 @@ def main() -> int:
             f"（在 {res0['failed_at'] or '—'} 停），加伺服 k={servo} 走通 {done}/{total} 步。")
 
     final = None
-    if not res["fell"] and steps:
-        body_f = tuple(steps[-1]["body"])
+    if not res["fell"] and run_segs:
+        # 末态取"实际跑完的最后一段"：计划从缓存读时 steps 是空的，不能靠 steps[-1]
+        body_f = tuple(run_segs[-1].body_b)
+        final_feet = dict(run_segs[-1].feet_b)
         h = G.hold(rig, fg, final_feet, body_f, 2.0)          # 末态原地静置 2 s
         cmap = contact_map(rig, fg)
         on_plat = {leg: any(nm == "platform" for nm, _ in cmap.get(leg, [])) for leg in G.LEGS}
@@ -738,11 +818,16 @@ def main() -> int:
         say()
         say("  末态核验（原地静置 2 s，读 contact 里真实生效的 geom 与法向力）：")
         say(f"    机身 ({body_f[0]:.3f}, {body_f[1]:.3f}, {body_f[2]:.3f})  "
-            f"pitch {math.degrees(body_f[3]):+.1f}°  伸展 {steps[-1]['max_ext']*100:.0f}%  "
-            f"重心余量 {steps[-1]['margin_settle']*1000:.0f} mm")
-        say(f"    静置：漂移 Δx {h['dx']*1000:+.0f} / Δy {h['dy']*1000:+.0f} / Δz {h['dz']*1000:+.0f} mm，"
-            f"倾角 {h['tilt']:.1f}°，打滑 {h['slip_mm']:.1f} mm，力矩峰值 {h['peak_tau']*100:.0f}%，"
-            f"{'未倾覆' if h['tilt'] < 20 else '有倾覆风险'}")
+            f"pitch {math.degrees(body_f[3]):+.1f}°"
+            + (f"  伸展 {steps[-1]['max_ext']*100:.0f}%  "
+               f"重心余量 {steps[-1]['margin_settle']*1000:.0f} mm"
+               if len(steps) == total else ""))
+        if h is None:
+            say("    静置：末态 IK 不可达，未做静置核验")
+        else:
+            say(f"    静置：漂移 Δx {h['dx']*1000:+.0f} / Δy {h['dy']*1000:+.0f} / Δz {h['dz']*1000:+.0f} mm，"
+                f"倾角 {h['tilt']:.1f}°，打滑 {h['slip_mm']:.1f} mm，力矩峰值 {h['peak_tau']*100:.0f}%，"
+                f"{'未倾覆' if h['tilt'] < 20 else '有倾覆风险'}")
         say("    四足接触：" + "  ".join(
             f"{leg}→{'/'.join(f'{nm} {n:.0f}N' for nm, n in cmap.get(leg, [])) or '无'}"
             for leg in G.LEGS))
@@ -844,15 +929,32 @@ def render(rig: G.Rig, fg, segs, steps, res, servo: float = 1.2, picks=None) -> 
 
 def view(rig: G.Rig, fg, segs, steps, cycles: int = 4, base: int = 0,
          entry: bool = True, one_phase: bool = False) -> int:
-    """3D 慢动作：播整条步态（与跑数据同一条流程），播完停在窗口里（--fast = 1 倍速）。"""
+    """3D 播放整条步态（与跑数据同一条流程），播完停在窗口里（--slow = 0.5 倍速）。
+
+    规划全部在开窗口之前做完：两段式的爬梯段要按入口结束的实测位姿重规划，
+    以前是在入口走完之后才算的 —— 窗口里机器狗站着不动好几分钟，看着像卡死。
+    现在先在无窗口状态下把入口段快跑一遍、拿到实测状态，把爬梯段规划好（有缓存就直读），
+    开窗口以后就是一路不停地走完 20 步。
+    """
     import mujoco.viewer
 
-    hz = 50.0 if "--fast" in sys.argv[1:] else 25.0
+    hz = 25.0 if "--slow" in sys.argv[1:] else 50.0
     model, data = rig.model, rig.data
     n_lift = len([x for x in segs if x.lift])
+    two = entry and not one_phase
+    plans = None
+    if two:
+        e_segs = entry_part(rig, fg, cycles, base, segs)
+        G.run_plan(rig, e_segs, fg, body_servo=1.2)      # 无窗口快跑入口段（约 1 s），拿实测状态
+        st = read_state(rig, fg)
+        c_segs, _, c_notes = plan_climb(rig, fg, cycles, base, st, "--rebuild" not in sys.argv[1:])
+        if c_segs is None:
+            print("  按实测重规划爬梯段失败：", c_notes)
+            return 1
+        plans = (e_segs, c_segs, st)
     print(f"  播放（{hz/50:.1f} 倍速）：{n_lift} 步"
-          f"{'（两段式：入口 → 实测重规划 → 爬梯）' if entry and not one_phase else ''}，"
-          f"每步 挪重心→抬腿→落定")
+          f"{'（两段式：入口 → 实测重规划 → 爬梯，中间不停）' if two else ''}，"
+          f"每步 挪重心→抬腿→落定", flush=True)
     with mujoco.viewer.launch_passive(model, data, show_left_ui=False,
                                       show_right_ui=False) as viewer:
         viewer.opt.geomgroup[3] = 1
@@ -866,14 +968,14 @@ def view(rig: G.Rig, fg, segs, steps, cycles: int = 4, base: int = 0,
                                     float(data.qpos[2]) - 0.12)
 
         sync = G.pacer(viewer, on_frame=follow, hz=hz)
-        if entry and not one_phase:
-            res, _, _, _, _ = run_two_phase(rig, fg, cycles, base, 1.2, sync=sync)
+        if two:
+            res, _, _, _, _ = run_two_phase(rig, fg, cycles, base, 1.2, sync=sync, plans=plans)
         else:
             res = G.run_plan(rig, segs, fg, sync=sync, body_servo=1.2)
         print(f"  结果：走通 {len(res['beats'])}/{n_lift} 步，"
               f"{'在 ' + str(res['failed_at']) + ' 失稳' if res['fell'] else '全程未失稳'}"
               f"，末态机身 x {res['x']:+.3f} z {res['z']:.3f}"
-              + ("，四足都在平台上了" if not res["fell"] else ""))
+              + ("，四足都在平台上了" if not res["fell"] else ""), flush=True)
         G.hold_open(viewer)
     return 0
 

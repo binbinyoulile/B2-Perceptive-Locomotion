@@ -100,6 +100,13 @@
 （左前足平台前移之后抬右前足）；分段重规划后 20/20。三次几何类微调（后足踏面边距 1→3.5/6 cm、
 平台大步拆 2×0.26 m、入口后站定 3→6 s）实测都没有改善，已全部回退 —— 问题不在落点，在"走路入场后的实测状态与计划假设不一致"。
 
+**耗时（2026-11-08 修）**：爬梯段的位姿搜索一次要 **384 s**（14 步 × 细网格）。
+以前这段是在 `--view` 的入口段走完之后才算的，所以画面里机器狗在梯口站着不动 6–10 分钟，看着像卡死。
+现在：① 规划全部移到**开窗口之前**（先在无窗口状态下把入口快跑 1 s 拿到实测状态）；② 爬梯段按"实测状态 + 规划参数指纹"缓存
+（`b2_follow_gait_plan_climb.json`），同一状态再来就是**读缓存 0 s**。实测 `--view` **1.4 s 起播**、
+20 步实时播完 **93 s**；跑数据也从 13–18 分钟降到 **2 s**（计划和爬梯段都命中缓存）。
+`--rebuild` 或改任何规划参数都会让缓存自动失效、重新算一次。
+
 ## 7. 已知限制
 
 - 纯关节 PD + 一个比例型机身位姿伺服，**没有真正的姿态/力矩闭环**，也没有足端力控；
@@ -115,5 +122,5 @@
 D:\Python313\python.exe .\experiments\b2\b2_follow_gait.py --plan    # 只规划，不跑动力学
 D:\Python313\python.exe .\experiments\b2\b2_follow_gait.py           # 平地起步，20 步
 D:\Python313\python.exe .\experiments\b2\b2_follow_gait.py --no-entry --rebuild   # 从 S0 起步，14/14
-D:\Python313\python.exe .\experiments\b2\b2_follow_gait.py --view    # 3D 慢放（读缓存）
+D:\Python313\python.exe .\experiments\b2\b2_follow_gait.py --view    # 3D 实时播放（--slow = 0.5 倍速）
 ```
