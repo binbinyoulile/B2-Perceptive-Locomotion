@@ -105,17 +105,20 @@ GROUND_FRONT, GROUND_REAR = 0.30, -0.185   # 平地站姿的前/后足离机身�
 #   收一点（后髋前 0.16 m）看着仍是正常站姿，后足两步就能上到位。
 
 
-# ---- 完整作业流（--demo）的参数：平地走近 → 入口 → 爬梯 → 登顶站直 + 平台前行 ----
+# ---- 完整作业流的参数：平地走近 → 入口 → 爬梯 → 登顶自然恢复（边走边站直）→ 平台前行 ----
 APPROACH_X = -0.715          # 平地起步的机身 x：比入口起点 GROUND_X(-0.115) 后退 0.6 m
 APPROACH_CYCLES = 2          # 走近段 = 2 个循环 = 8 步
 APPROACH_STRIDE = 0.30       # 步幅 0.30 m → 2 循环正好前进 0.60 m，落点回到名义站姿
 PLAT_CYCLES = 2              # 平台段 = 2 个循环 = 8 步
 PLAT_STRIDE = 0.26
-PLAT_STAND_OFF = 0.470       # 站直后机身离平台顶多高。平地站姿是 0.550，这里取 0.470：
-#   实测站到全高（1.338 m）时腿伸展 84%，而爬梯末态在平台上带 5–10 cm 横向/偏航漂移，
-#   三足支撑那一拍没有修正余量 → 前倾 45° 摔倒；低 8 cm 后 8/8 步全通（倾角 19°、峰值 92%）。
+PLAT_STAND_OFF = 0.470       # 平台上最终站高（机身离平台顶多高）。平地站姿是 0.550，这里取 0.470：
+#   0.550 = 平地全站高，腿伸展 84%；"边走边放平"能把 0.470 自然走上去（8 级实测 8/8、末态 pitch 0），
+#   但 0.550 会在平台第 6 步挪重心时翻（倾角 48°）—— 伸展到 84% 就没剩修正余量了，
+#   这是"纯关节 PD + 比例机身伺服"的能力上限，要更高得上姿态/偏航闭环或足端力控。
 PLAT_PITCH_HI = 8.0          # 平台段允许的抬头（越小越像正常走路，但三足支撑时余量会小一点）
-STANDUP_S = 4.0              # 登顶后「站直」（仰 9° → 0°、z 1.208 → 1.338）用这么久；太短会残留 15° 倾角
+PLAT_PAUSE_S = 1.2           # 登顶后先停这么久再起步：最后一步落地还在晃，立刻抬腿会让支撑腿打滑
+#   （实测第一拍打滑 248 mm、跟着侧翻 45°）。之后不再摆站直段，见 build(platform=…)。
+
 
 
 def approach_stance(rig: G.Rig):
@@ -282,7 +285,7 @@ def build(rig: G.Rig, fg, cycles: int, base: int = 0, entry: bool = False,
     only_entry=True：只生成入口那一段（两段式流程的第一段）。
     state=实测状态：按实测机身/足端位姿生成（爬梯段 / 入口段 / 平台段都可以用）。
     approach=True（配合 only_approach）：平地起步段 —— 从楼梯口后方的正常站姿走到入口起点。
-    platform=True（配合 only_platform）：登顶后段 —— 先站直，再在平台上往前走几步。
+    platform=True（配合 only_platform）：登顶后段 —— 先停一拍，然后边走边把身子放平、抬到平台站高。
     """
     notes: list[str] = []
     if state is not None and not (entry or approach or platform):
@@ -317,22 +320,18 @@ def build(rig: G.Rig, fg, cycles: int, base: int = 0, entry: bool = False,
             return None, [], ["平台段需要实测状态"], None
         feet = {leg: tuple(float(v) for v in state["feet"][leg]) for leg in G.LEGS}
         body0 = tuple(float(v) for v in state["body"])
-        stand = (body0[0], G.BODY_Y, S.top(S.top_level) + PLAT_STAND_OFF, 0.0)
-        joints, _ = G.legs_ik(rig, stand, feet)
-        if joints is None:
-            return None, [], ["平台站直位姿 IK 不可达"], None
-        # 登顶后先停一拍再站起来：爬梯最后一步（后足上平台）落地时还在晃，
-        # 立刻抬腿会让支撑腿打滑（实测第一拍打滑 248 mm、跟着侧翻 45°）。
-        segs = [G.Seg("登顶停顿", 1.5, body0, body0, dict(feet), dict(feet)),
-                G.Seg("登顶站稳", STANDUP_S, body0, stand, dict(feet), dict(feet)),
-                G.Seg("站定", 2.0, stand, stand, dict(feet), dict(feet))]
+        # 登顶后的恢复不再"硬掰"：不摆一个算好的站直位姿硬顶上去，只先停一拍让落地余震过去
+        # （爬梯最后一步落地时还在晃，立刻抬腿会让支撑腿打滑：实测第一拍打滑 248 mm、侧翻 45°）。
+        # 之后一边在平台上走，一边把机身高度和俯仰从"爬梯末态"平滑过渡到"平地站姿"，
+        # 见下面的 flat_walk(z_from=…, pitch_from=…)：机身每走一步放平一点、抬高一点。
+        segs = [G.Seg("登顶停顿", PLAT_PAUSE_S, body0, body0, dict(feet), dict(feet))]
         steps = []
-        body = {"body": stand, "max_ext": 0.0, "margin": 0.0, "ext": {}}
+        body = {"body": body0, "max_ext": 0.0, "margin": 0.0, "ext": {}}
         cur = body
         levels = start_levels(base)
-        notes.append(f"登顶站直：机身 z {body0[2]:.3f} pitch {math.degrees(body0[3]):+.1f}° → "
-                     f"z {stand[2]:.3f} pitch 0°（平台顶 {S.top(S.top_level):.3f} + 站高 {PLAT_STAND_OFF:.3f}，"
-                     f"比平地站高 {GROUND_Z:.3f} 低 {(GROUND_Z - PLAT_STAND_OFF)*100:.0f} cm 以留横向修正余量）")
+        notes.append(f"登顶自然恢复：从机身 z {body0[2]:.3f} pitch {math.degrees(body0[3]):+.1f}° 起步，"
+                     f"不停下来摆姿势，边走边放平到 z {S.top(S.top_level) + PLAT_STAND_OFF:.3f} pitch 0°"
+                     f"（平台顶 {S.top(S.top_level):.3f} + 站高 {PLAT_STAND_OFF:.3f}）")
     elif entry:
         if state is not None:
             # 完整作业流的第一段之后：机器狗是自己走过来的，落点不可能正好等于名义站姿，
@@ -449,15 +448,29 @@ def build(rig: G.Rig, fg, cycles: int, base: int = 0, entry: bool = False,
     # 机身锚点 = 上一位姿往前 1/4 步幅（平滑前进），位姿仍由 solve 在窗口内搜：
     # 实测"直接按几何位置摆机身"会在最后一条腿抬起那拍把重心丢到支撑三角形外（−36 mm、侧翻 48°），
     # 所以必须让 solve 在 ±12 cm 窗口里挑一个余量够的位姿；俯仰压到 10° 以内，看起来是平地走路。
+    #
+    # z_from / pitch_from：机身高度与俯仰的"起点"。给了就把它们按步线性过渡到 z_stand / 0°，
+    # 也就是"边走边把身子放平、抬到站高"—— 登顶后的自然恢复就用这一条，不再单独摆一个站直段。
     def flat_walk(n_cycles: int, stride: float, z_stand: float, tag: str,
-                  pitch_hi: float = 10.0, slow: float = 1.15) -> bool:
+                  pitch_hi: float = 10.0, slow: float = 1.15,
+                  z_from: float | None = None, pitch_from: float | None = None) -> bool:
         nonlocal cur
+        z0 = z_stand if z_from is None else z_from
+        p0 = 0.0 if pitch_from is None else pitch_from
+        n = max(1, n_cycles * len(G.LEGS))
+        k = 0
         for c in range(n_cycles):
             for leg in G.LEGS:
-                anchor = (cur["body"][0] + stride / 4.0, G.BODY_Y, z_stand, 0.0)
+                k += 1
+                t = k / n
+                z = z0 + (z_stand - z0) * t
+                pitch = p0 * (1.0 - t)
+                # 过渡时放宽这一步的抬头上限（否则 16° 的爬梯末态一次就被压到 8° 以下，等于硬掰）
+                hi = pitch_hi if pitch_from is None else max(pitch_hi, abs(math.degrees(pitch)) + 4.0)
+                anchor = (cur["body"][0] + stride / 4.0, G.BODY_Y, z, pitch)
                 nf = dict(feet)
                 nf[leg] = (feet[leg][0] + stride, feet[leg][1], feet[leg][2])
-                if not do_step(leg, nf, f"{tag}{c+1}", c + 1, pitch_hi=pitch_hi,
+                if not do_step(leg, nf, f"{tag}{c+1}", c + 1, pitch_hi=hi,
                                anchor=anchor, win=0.12, slow=slow):
                     return False
         return True
@@ -474,13 +487,16 @@ def build(rig: G.Rig, fg, cycles: int, base: int = 0, entry: bool = False,
         if only_approach:
             return segs, steps, notes, feet
 
-    # ---- 完整作业流的末段：登顶站直 + 平台前行 ----
+    # ---- 完整作业流的末段：登顶后一边在平台上走，一边把身子放平、抬到平地站高 ----
     if platform:
-        if not flat_walk(PLAT_CYCLES, PLAT_STRIDE, S.top(S.top_level) + PLAT_STAND_OFF, "平台", pitch_hi=PLAT_PITCH_HI):
+        z_hi = S.top(S.top_level) + PLAT_STAND_OFF
+        if not flat_walk(PLAT_CYCLES, PLAT_STRIDE, z_hi, "平台", pitch_hi=PLAT_PITCH_HI,
+                         z_from=body0[2], pitch_from=body0[3]):
             return segs, steps, notes, feet
-        segs.append(G.Seg("站定", 0.8, cur["body"], cur["body"], dict(feet), dict(feet)))
-        notes.append(f"平台行走完成：机身 x {cur['body'][0]:+.3f}（平台后沿 "
-                     f"{edge_x(S.top_level):.3f}，顶 {S.top(S.top_level):.3f}）")
+        segs.append(G.Seg("站定", 1.0, cur["body"], cur["body"], dict(feet), dict(feet)))
+        notes.append(f"平台行走完成：机身 x {cur['body'][0]:+.3f}、z {cur['body'][2]:.3f}"
+                     f"（= 平台顶 {S.top(S.top_level):.3f} + 站高 {cur['body'][2] - S.top(S.top_level):.3f}），"
+                     f"pitch {math.degrees(cur['body'][3]):+.1f}°")
         if only_platform:
             return segs, steps, notes, feet
 
@@ -551,7 +567,11 @@ PLAN_JSON = ROOT / "experiments" / "b2" / "b2_follow_gait_plan.json"
 CLIMB_JSON = ROOT / "experiments" / "b2" / "b2_follow_gait_plan_climb.json"
 ENTRY_JSON = ROOT / "experiments" / "b2" / "b2_follow_gait_plan_entry.json"
 APPROACH_JSON = ROOT / "experiments" / "b2" / "b2_follow_gait_plan_approach.json"
-PLATFORM_JSON = ROOT / "experiments" / "b2" / "b2_follow_gait_plan_platform.json"
+# 平台段（登顶后怎么恢复站姿）的逻辑版本：改了这段就 +1，旧的平台计划缓存自动失效，
+# 不用连累其它几段（走近/入口/爬梯的计划与它无关，重算一次分别是 25 s / 17 s / 6 min）。
+PLATFORM_VERSION = 2
+PLATFORM_JSON = (ROOT / "experiments" / "b2" /
+                 f"b2_follow_gait_plan_platform_v{PLATFORM_VERSION}_h{int(PLAT_STAND_OFF * 1000)}.json")
 CLIMB_DEMO_JSON = ROOT / "experiments" / "b2" / "b2_follow_gait_plan_climb_demo.json"
 # 规划参数指纹：改了任何一个规划参数，爬梯段缓存自动失效（否则会悄悄复用手改参数之前的计划）
 PLAN_FINGERPRINT = (PITCH_HI, EDGE, PRELOAD, SWING_CLEAR, EXT_CAP, WIN_X, WIN_Z,
@@ -832,7 +852,7 @@ def run_two_phase(rig: G.Rig, fg, cycles: int, base: int, servo: float,
 
 
 # ================================================================ 完整作业流（--demo）
-# 平地起步 → 自主走到楼梯口 → 按实测重规划入场 → 20 步爬梯 → 登顶站直 → 平台上前走几步。
+# 平地起步 → 自主走到楼梯口 → 按实测重规划入场 → 20 步爬梯 → 登顶自然恢复（边走边站直）→ 平台前行。
 # 四段都走 build()：走近段 / 平台段是"平地上的四拍走"（腿落点 = 自己原位 + 步幅，
 # 机身锚点取剩下三足的内切圆心、俯仰压到 10° 以内）；入口段 / 爬梯段仍是细网格位姿搜索 +
 # 按实测位姿重规划 + 缓存。参数见文件开头「完整作业流的参数」。
@@ -852,7 +872,7 @@ def approach_plan(rig: G.Rig, fg, use_cache: bool = True):
 
 
 def platform_plan(rig: G.Rig, fg, st: dict, use_cache: bool = True):
-    """后置阶段：登顶后先站直（恢复平地站姿），再用同一套四拍在平台上往前走。
+    """后置阶段：登顶后不停下来摆姿势，用同一套四拍在平台上往前走，边走边恢复到站高。
 
     起点是登顶后的实测状态，所以缓存键跟着实测状态走（和入口段/爬梯段同一个机制）。
     """
@@ -865,7 +885,7 @@ def demo_plans(rig: G.Rig, fg, cycles: int, base: int, use_cache: bool = True):
     为什么要先"空跑"一遍：入口段和爬梯段都要按**实测**位姿重规划，而实测位姿只有真的跑过
     才有。这里先在无窗口状态下把整条流程跑一遍拿到各阶段切换时的真实状态，规划好四段；
     播画面时从起点重跑，物理是确定性的，所以这些计划照样成立（每段切换处还会核对偏差）。
-    顺序：走近(解析) → 实测量 → 入口(搜) → 实测量 → 爬梯(搜+缓存) → 实测量 → 站直+平台走(解析)。
+    顺序：走近(解析) → 实测量 → 入口(搜) → 实测量 → 爬梯(搜+缓存) → 实测量 → 平台走+恢复站高(解析)。
     """
     servo = 1.2
     a_segs, a_steps, a_notes = approach_plan(rig, fg)
@@ -887,7 +907,7 @@ def demo_plans(rig: G.Rig, fg, cycles: int, base: int, use_cache: bool = True):
     phases = [("平地走近", a_segs, a_steps, a_notes),
               ("按实测重规划入口", e_segs, e_steps, e_notes),
               ("爬梯（20 步核心）", c_segs, c_steps, c_notes),
-              ("登顶站直 + 平台前行", p_segs, p_steps, p_notes)]
+              ("登顶自然恢复 + 平台前行", p_segs, p_steps, p_notes)]
     return phases, [st1, st2, st3], None
 
 
@@ -976,7 +996,7 @@ def demo_main(rig: G.Rig, fg, cycles: int, base: int, argv) -> int:
         lines.append(t)
 
     say("=" * 108)
-    say("B2 完整作业流：平地起步 → 自主走到楼梯口 → 按实测重规划入场 → 20 步爬梯 → 登顶站直 → 平台前行")
+    say("B2 完整作业流：平地起步 → 自主走到楼梯口 → 按实测重规划入场 → 20 步爬梯 → 登顶自然恢复 → 平台前行")
     say("=" * 108)
     for name, segs, steps, notes_ in phases:
         lift = [x for x in segs if x.lift]
@@ -1011,8 +1031,8 @@ def demo_main(rig: G.Rig, fg, cycles: int, base: int, argv) -> int:
         say()
         say("  末态核验（原地静置 2 s，读 contact 里真实生效的 geom 与法向力）：")
         say(f"    机身 ({body_f[0]:.3f}, {body_f[1]:.3f}, {body_f[2]:.3f})  pitch {math.degrees(body_f[3]):+.1f}°"
-            f"（平台顶 {S.top(S.top_level):.3f} + 站高 {PLAT_STAND_OFF:.3f}；比平地站高 {GROUND_Z:.3f} 低 "
-                f"{(GROUND_Z - PLAT_STAND_OFF)*100:.0f} cm —— 为了在漂移后的站姿上还有横向修正余量）")
+            f"（平台顶 {S.top(S.top_level):.3f} + 站高 {PLAT_STAND_OFF:.3f}；再高到平地全站高 "
+            f"{GROUND_Z:.3f} 时腿伸展 84%、没修正余量，实测会翻 —— 这是当前控制器的上限）")
         if h is not None:
             say(f"    静置：Δx {h['dx']*1000:+.0f} / Δy {h['dy']*1000:+.0f} / Δz {h['dz']*1000:+.0f} mm，"
                 f"倾角 {h['tilt']:.1f}°，打滑 {h['slip_mm']:.1f} mm，力矩峰值 {h['peak_tau']*100:.0f}%，"

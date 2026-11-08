@@ -61,9 +61,6 @@ SERVO = 1.2                    # 机身位姿伺服增益（和 3 级那条一�
 # 每级末尾核对"实际走的"与"计划的"：偏差超过这个值就说明中途打滑/被顶偏了，
 # 下一级改用实测状态重新锚定（和入口→爬梯那道边界同一个机制）。实测正常级别是 15–45 mm。
 REANCHOR_DEV = 0.060
-# 登顶后站多高（平台顶 + 这个偏移）。3 级那条用 0.470；长楼梯的登顶入场状态更差
-# （爬完 8 级时俯仰 16.5°、倾角 29°），同高度上平台第一拍就侧滑 205 mm，所以再降一点留伸展余量。
-PLAT_STAND_OFF_LONG = 0.420
 
 
 def cache_path(tag: str) -> Path:
@@ -74,7 +71,6 @@ def cache_path(tag: str) -> Path:
 def make_rig(steps: int) -> tuple[G.Rig, G.StairSpec]:
     """按级数生成场景并加载；再用编译后的模型反算几何核对一遍。"""
     spec = G.StairSpec(n_steps=steps)
-    B.PLAT_STAND_OFF = PLAT_STAND_OFF_LONG
     rig = G.load_rig_xml("b2", G.b2_stairs_scene_xml(spec), SCENE_DIR)
     got = G.StairSpec.from_model(rig.model)
     if got.key() != spec.key():
@@ -130,8 +126,9 @@ def plan_entry_long(rig: G.Rig, fg, spec: G.StairSpec, st: dict, use_cache: bool
 
 
 def plan_platform_long(rig: G.Rig, fg, spec: G.StairSpec, st: dict, use_cache: bool = True):
-    """登顶站直 + 平台前行：平台高度随级数变，所以缓存键要带完整几何。"""
-    return B.cached_plan(cache_path(f"platform_h{int(B.PLAT_STAND_OFF * 1000)}"), rig, fg,
+    """登顶自然恢复 + 平台前行：平台高度随级数变，所以缓存键要带完整几何与逻辑版本。"""
+    return B.cached_plan(cache_path(f"platform_v{B.PLATFORM_VERSION}_h{int(B.PLAT_STAND_OFF * 1000)}"),
+                         rig, fg,
                          B.PLAT_CYCLES, 0, st, "平台段",
                          {"platform": True, "only_platform": True}, use_cache,
                          stairs=spec.key())
@@ -313,11 +310,11 @@ def plan_all(rig: G.Rig, fg, spec: G.StairSpec, entry: bool = True, use_cache: b
                       "residual_mm": {}, "levels": stance_levels(rig, st),
                       "plan_s": 0.0})
 
-    # ---- 登顶站直 + 平台前行 ----
+    # ---- 登顶自然恢复（边走边站直）+ 平台前行 ----
     p_segs, p_steps, p_notes = plan_platform_long(rig, fg, spec, st, use_cache)
     if p_segs is None:
         return ["平台段规划失败：" + str(p_notes)]
-    add("登顶站直 + 平台前行", p_segs, p_steps, p_notes)
+    add("登顶自然恢复 + 平台前行", p_segs, p_steps, p_notes)
     return []
 
 
