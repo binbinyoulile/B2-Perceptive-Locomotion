@@ -73,10 +73,10 @@ OUT_JSON = ROOT / "experiments" / "b2" / "b2_follow_gait.json"
 OUT_PNG = ROOT / "experiments" / "b2" / "b2_follow_gait.png"
 OUT_TRACE = ROOT / "experiments" / "b2" / "b2_follow_gait_trace.txt"
 
-TREAD_DEPTH = 0.272
-TREAD_REAR0 = 0.2166                     # 第 1 级后沿
-LEVEL_TOP = {0: 0.0, 1: 0.197, 2: 0.394, 3: 0.591, 4: 0.788}
-TOP_LEVEL = 4                            # 平台：再往上没有级了
+# 楼梯几何：级高 0.197（2026-11-07 现场实测）/ 踏面 0.272 / 宽 0.81 / 第 1 级后沿 0.2166，
+# 3 级 + 2 m 平台。落点、级号、高度一律从 S 取数（代码里不再写死坐标）；
+# 长楼梯由 b2_long_stair.py 把 S 换成级数更多的 StairSpec，本文件的其余逻辑不用改。
+S = G.StairSpec()
 EXT_CAP = 0.95
 PITCH_HI = 30.0          # 抬头上限。⚠ 不要为了"多省点余量"调小这个：轨迹是按这套参数逐步推出来的，
 #   改任何一个参数都会让前 12 步的位姿整体平移 2–4 cm，实测会把已经跑通的爬梯段重新跑坏。
@@ -153,7 +153,7 @@ def entry_spec(rig: G.Rig) -> list[tuple[str, tuple, str]]:
         #    左后足在"两前足刚上第 1 级、机身还在后面"时挪到地面位置，那时三角形最宽。
         ("FR", foot_target(rig, "FR", 1), "FR 上第1级"),
         ("FL", foot_target(rig, "FL", 1), "FL 上第1级"),
-        ("RL", g("RL", TREAD_REAR0 - 0.15), "RL 平地到位"),
+        ("RL", g("RL", S.rear0 - 0.15), "RL 平地到位"),
         ("RR", g("RR", 0.000), "RR 平地前移"),
         ("FL", foot_target(rig, "FL", 2), "FL 上第2级"),
         ("RR", foot_target(rig, "RR", 1), "RR 上第1级"),
@@ -161,7 +161,7 @@ def entry_spec(rig: G.Rig) -> list[tuple[str, tuple, str]]:
 
 
 def edge_x(level: int) -> float:
-    return TREAD_REAR0 + TREAD_DEPTH * (level - 1)
+    return S.rear0 + S.tread * (level - 1)
 
 
 def foot_target(rig: G.Rig, leg: str, level: int):
@@ -173,14 +173,14 @@ def foot_target(rig: G.Rig, leg: str, level: int):
     """
     y = G.BODY_Y + rig.foot_y[leg]
     if level <= 0:
-        return (TREAD_REAR0 - 0.15 + TREAD_DEPTH * level, y, rig.r + PRELOAD)
-    if level == TOP_LEVEL:
+        return (S.rear0 - 0.15 + S.tread * level, y, rig.r + PRELOAD)
+    if level == S.top_level:
         x = edge_x(level) + (PLAT_FRONT if leg in ("FL", "FR") else PLAT_REAR)
-        return (x, y, LEVEL_TOP[level] + rig.r + PRELOAD)
-    cx = edge_x(level) + TREAD_DEPTH / 2.0
-    d = TREAD_DEPTH / 2.0 - rig.r - EDGE
+        return (x, y, S.top(level) + rig.r + PRELOAD)
+    cx = edge_x(level) + S.tread / 2.0
+    d = S.tread / 2.0 - rig.r - EDGE
     x = cx + d if leg in ("FL", "FR") else cx - d
-    return (x, y, LEVEL_TOP[level] + rig.r + PRELOAD)
+    return (x, y, S.top(level) + rig.r + PRELOAD)
 
 
 def start_levels(base: int = 0) -> dict:
@@ -317,7 +317,7 @@ def build(rig: G.Rig, fg, cycles: int, base: int = 0, entry: bool = False,
             return None, [], ["平台段需要实测状态"], None
         feet = {leg: tuple(float(v) for v in state["feet"][leg]) for leg in G.LEGS}
         body0 = tuple(float(v) for v in state["body"])
-        stand = (body0[0], G.BODY_Y, LEVEL_TOP[TOP_LEVEL] + PLAT_STAND_OFF, 0.0)
+        stand = (body0[0], G.BODY_Y, S.top(S.top_level) + PLAT_STAND_OFF, 0.0)
         joints, _ = G.legs_ik(rig, stand, feet)
         if joints is None:
             return None, [], ["平台站直位姿 IK 不可达"], None
@@ -331,7 +331,7 @@ def build(rig: G.Rig, fg, cycles: int, base: int = 0, entry: bool = False,
         cur = body
         levels = start_levels(base)
         notes.append(f"登顶站直：机身 z {body0[2]:.3f} pitch {math.degrees(body0[3]):+.1f}° → "
-                     f"z {stand[2]:.3f} pitch 0°（平台顶 {LEVEL_TOP[TOP_LEVEL]:.3f} + 站高 {PLAT_STAND_OFF:.3f}，"
+                     f"z {stand[2]:.3f} pitch 0°（平台顶 {S.top(S.top_level):.3f} + 站高 {PLAT_STAND_OFF:.3f}，"
                      f"比平地站高 {GROUND_Z:.3f} 低 {(GROUND_Z - PLAT_STAND_OFF)*100:.0f} cm 以留横向修正余量）")
     elif entry:
         if state is not None:
@@ -476,11 +476,11 @@ def build(rig: G.Rig, fg, cycles: int, base: int = 0, entry: bool = False,
 
     # ---- 完整作业流的末段：登顶站直 + 平台前行 ----
     if platform:
-        if not flat_walk(PLAT_CYCLES, PLAT_STRIDE, LEVEL_TOP[TOP_LEVEL] + PLAT_STAND_OFF, "平台", pitch_hi=PLAT_PITCH_HI):
+        if not flat_walk(PLAT_CYCLES, PLAT_STRIDE, S.top(S.top_level) + PLAT_STAND_OFF, "平台", pitch_hi=PLAT_PITCH_HI):
             return segs, steps, notes, feet
         segs.append(G.Seg("站定", 0.8, cur["body"], cur["body"], dict(feet), dict(feet)))
         notes.append(f"平台行走完成：机身 x {cur['body'][0]:+.3f}（平台后沿 "
-                     f"{edge_x(TOP_LEVEL):.3f}，顶 {LEVEL_TOP[TOP_LEVEL]:.3f}）")
+                     f"{edge_x(S.top_level):.3f}，顶 {S.top(S.top_level):.3f}）")
         if only_platform:
             return segs, steps, notes, feet
 
@@ -518,7 +518,7 @@ def build(rig: G.Rig, fg, cycles: int, base: int = 0, entry: bool = False,
     adjusted = False
     for c in range(cycles):
         for leg, lv_from, lv_to in steps_of_cycle(c, base):
-            if lv_to > TOP_LEVEL:
+            if lv_to > S.top_level:
                 notes.append(f"第 {c+1} 循环 {leg}：{lv_from}→{lv_to} 越过平台，跳过")
                 continue
             if levels[leg] != lv_from:
@@ -527,20 +527,20 @@ def build(rig: G.Rig, fg, cycles: int, base: int = 0, entry: bool = False,
             new_feet = dict(feet)
             new_feet[leg] = foot_target(rig, leg, lv_to)
             # 后足踏上平台那两步是整条轨迹余量最低的（三足全在同一水平面），用平台段的激进挑选
-            rear_onto_plat = lv_to == TOP_LEVEL and leg in ("RL", "RR")
+            rear_onto_plat = lv_to == S.top_level and leg in ("RL", "RR")
             if not do_step(leg, new_feet, f"{lv_from}→{lv_to}", c + 1,
                            aggressive=rear_onto_plat):
                 return segs, steps, notes, feet
             levels[leg] = lv_to
             # 两只前足都上了平台、两只后足都在第 3 级 —— 此时先让前足在平地上各迈一步，
             # 把"前两足 + 后一足"的三角形撑开，再让后足上平台（用户提的办法）
-            if (not adjusted and levels["FL"] == TOP_LEVEL and levels["FR"] == TOP_LEVEL
-                    and levels["RL"] == TOP_LEVEL - 1 and levels["RR"] == TOP_LEVEL - 1):
+            if (not adjusted and levels["FL"] == S.top_level and levels["FR"] == S.top_level
+                    and levels["RL"] == S.top_level - 1 and levels["RR"] == S.top_level - 1):
                 adjusted = True
                 for l2 in ("FL", "FR"):
                     nf = dict(feet)
                     x, y, z = feet[l2]
-                    nf[l2] = (edge_x(TOP_LEVEL) + PLAT_ADJ, y, z)
+                    nf[l2] = (edge_x(S.top_level) + PLAT_ADJ, y, z)
                     if not do_step(l2, nf, "平台上前移", c + 1, aggressive=True):
                         return segs, steps, notes, feet
     segs.append(G.Seg("收尾", 0.5, cur["body"], cur["body"], dict(feet), dict(feet)))
@@ -608,14 +608,18 @@ def state_key(st: dict) -> list:
 
 
 def cached_plan(path, rig: G.Rig, fg, cycles: int, base: int, st: dict, label: str,
-                build_kw: dict, use_cache: bool = True):
-    """按实测状态规划某一段，并把结果按「实测状态 + 规划参数指纹」缓存下来。
+                build_kw: dict, use_cache: bool = True, stairs=None):
+    """按实测状态规划某一段，并把结果按「实测状态 + 规划参数指纹 + 楼梯几何」缓存下来。
 
     为什么要缓存：爬梯段（14 步的细网格位姿搜索）一次要 6 分钟，以前是入口走完才现场算，
     于是 --view 里机器狗在窗前站着不动好几分钟 —— 看着像卡死，其实在规划。
     现在规划全部放在开窗口之前，而且同样的实测状态第二次跑就是读缓存、几乎不等。
+
+    stairs：这段计划依赖的楼梯几何（StairSpec.key() 或 .local_key()）。
+    旧缓存文件没有这个字段，按"同一套几何"处理（它们是本文件写死 3 级几何时算的）。
     """
     key = state_key(st)
+    want = None if stairs is None else list(stairs)
     hit = None
     if use_cache and path.exists():
         try:
@@ -623,19 +627,22 @@ def cached_plan(path, rig: G.Rig, fg, cycles: int, base: int, st: dict, label: s
         except json.JSONDecodeError:
             hit = None
     if (hit and hit.get("cycles") == cycles and hit.get("base") == base
-            and hit.get("params") == list(PLAN_FINGERPRINT) and hit.get("state") == key):
+            and hit.get("params") == list(PLAN_FINGERPRINT) and hit.get("state") == key
+            and (want is None or hit.get("stairs", want) == want)):
         print(f"  {label}读缓存（{len(hit['segments'])} 段，同一实测状态，不重算）", flush=True)
         return segs_load(hit["segments"]), [], [f"（{label}读自缓存）"]
-    print(f"  按实测位姿重规划{label}……（跑完会缓存，下次就不用等）", flush=True)
+    print(f"  重规划{label}……（跑完会缓存，下次就不用等）", flush=True)
     t0 = time.perf_counter()
     segs, steps, notes, _ = build(rig, fg, cycles, base, state=st, **build_kw)
     print(f"  {label}规划完成：{len(segs) if segs else 0} 段，用时 {time.perf_counter() - t0:.0f} s",
           flush=True)
     if segs is not None:
-        path.write_text(json.dumps({"cycles": cycles, "base": base,
-                                    "params": list(PLAN_FINGERPRINT), "state": key,
-                                    "segments": segs_dump(segs)}, ensure_ascii=False),
-                        encoding="utf-8")
+        rec = {"cycles": cycles, "base": base,
+               "params": list(PLAN_FINGERPRINT), "state": key,
+               "segments": segs_dump(segs)}
+        if want is not None:
+            rec["stairs"] = want
+        path.write_text(json.dumps(rec, ensure_ascii=False), encoding="utf-8")
     return segs, steps, notes
 
 
@@ -654,11 +661,9 @@ def level_of(rig: G.Rig, z: float, x: float) -> str:
     """把足心位置映射回"在哪一级"（容差 3 cm，否则返回 ?）。
     地面上的级别只能靠 x 分辨（level 0 与负级的高度一样），所以按落点规则反算。"""
     if abs(z - (rig.r + PRELOAD)) < 0.030:
-        return str(int(round((x - (TREAD_REAR0 - 0.15)) / TREAD_DEPTH)))
-    for lv, top in sorted(LEVEL_TOP.items()):
-        if lv == 0:
-            continue
-        if abs(z - (top + rig.r + PRELOAD)) < 0.030:
+        return str(int(round((x - (S.rear0 - 0.15)) / S.tread)))
+    for lv in range(1, S.top_level + 1):
+        if abs(z - (S.top(lv) + rig.r + PRELOAD)) < 0.030:
             return str(lv)
     return "?"
 
@@ -1006,7 +1011,7 @@ def demo_main(rig: G.Rig, fg, cycles: int, base: int, argv) -> int:
         say()
         say("  末态核验（原地静置 2 s，读 contact 里真实生效的 geom 与法向力）：")
         say(f"    机身 ({body_f[0]:.3f}, {body_f[1]:.3f}, {body_f[2]:.3f})  pitch {math.degrees(body_f[3]):+.1f}°"
-            f"（平台顶 {LEVEL_TOP[TOP_LEVEL]:.3f} + 站高 {PLAT_STAND_OFF:.3f}；比平地站高 {GROUND_Z:.3f} 低 "
+            f"（平台顶 {S.top(S.top_level):.3f} + 站高 {PLAT_STAND_OFF:.3f}；比平地站高 {GROUND_Z:.3f} 低 "
                 f"{(GROUND_Z - PLAT_STAND_OFF)*100:.0f} cm —— 为了在漂移后的站姿上还有横向修正余量）")
         if h is not None:
             say(f"    静置：Δx {h['dx']*1000:+.0f} / Δy {h['dy']*1000:+.0f} / Δz {h['dz']*1000:+.0f} mm，"
@@ -1038,7 +1043,7 @@ def main() -> int:
     argv = sys.argv[1:]
     entry = "--no-entry" not in argv            # 默认从平地正常站姿起步（多 7 步进入标准状态）
     base = 0
-    cycles = int(argv[argv.index("--cycles") + 1]) if "--cycles" in argv else 4
+    cycles = int(argv[argv.index("--cycles") + 1]) if "--cycles" in argv else S.top_level
     rig = G.load_rig("b2")
     fg = G.foot_gids(rig)
     if "--demo" in argv:
@@ -1097,7 +1102,7 @@ def main() -> int:
     if entry:
         say(f"  起步：平地站姿 —— 四足都在地面（前足 x {GROUND_X + GROUND_FRONT:+.3f}、"
             f"后足 x {GROUND_X + GROUND_REAR:+.3f}），机身 ({GROUND_X:+.3f}, {GROUND_Z:.3f}) pitch 0°；"
-            f"楼梯鼻端 x {TREAD_REAR0:+.3f}")
+            f"楼梯鼻端 x {S.rear0:+.3f}")
         say("  进入（7 步）：FR 上第1级 / FL 上第1级 / FL 上第2级 / RL、RR 平地前移 / RR 上第1级 / RL 到位")
         say("  进入后 = 标准状态 " + "  ".join(f"{l}{lname(lv[l])}" for l in G.LEGS)
             + "（就是之前验证过的爬梯起点），后面是同一套 14 步")

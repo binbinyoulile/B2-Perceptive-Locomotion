@@ -30,12 +30,15 @@
 - 唯一主脚本：`experiments/b2/b2_follow_gait.py`
 - 结果文档：**`B2_PLATFORM_CLIMB.md`**（本文档目录里唯一"活的"结论文档）
 - 复现：`D:\Python313\python.exe .\experiments\b2\b2_follow_gait.py --view`（在项目根目录运行）
+- 任意级数（多级楼梯）：`experiments/b2/b2_long_stair.py`，结论见 **`B2_LONG_STAIR.md`**
+  （场景按 `StairSpec` 生成，一级一个 `CLIMB_ONE_STEP` 循环，级数用 `--steps N` 指定）
 
 ## 2. 文档分类
 
 | 文档 | 角色 | 还要不要读 |
 |---|---|---|
 | `B2_PLATFORM_CLIMB.md` | **当前结论**：20 步全程数据、失败档案、耗时 | ✅ 必读 |
+| `B2_LONG_STAIR.md` | **任意级数**：几何参数化 + 一级一循环（含两级失败实测与 REALIGN 结论） | ✅ 必读 |
 | `STAIR_0272_UPDATE.md` | 钢梯尺寸改成 0.197/0.272/0.81 的由来与几何极限 | ✅ 背景 |
 | `THREE_ROBOT_COMPARE.md` | 三机同标准步态对比（为什么选 B2） | 🔸 背景 |
 | `B2_STAGGERED_STANCE_REPORT.md` / `B2_CROSS_STEP_REPORT.md` | 错位站姿与跨级姿态的静态可行域 | 🔸 步态依据 |
@@ -51,6 +54,9 @@
 |---|---|
 | `experiments/b2/b2_follow_gait.py` | 主脚本：入口/爬梯计划生成、两段式执行、报告与出图；`--demo` = 完整作业流（走近→入口→爬梯→平台前行） |
 | `experiments/b2/b2_follow_gait_plan*.json` | 四段规划缓存：`approach` / `entry` / `climb` / `platform`（各按「实测状态 + 参数指纹」缓存） |
+| `experiments/b2/b2_long_stair.py` | 任意级数：`StairSpec` → 生成场景 → 一级一个 `CLIMB_ONE_STEP` + REALIGN，直到下一级是平台 |
+| `experiments/b2/b2_follow_gait_plan_long_*.json` | 长楼梯的分级规划缓存（`l00…` 每级一份、`tail_sN` 登顶段、`entry`/`platform`），按「规划链状态 + 局部几何」缓存 |
+| `experiments/b2/b2_long_stair.{txt,json}` | 长楼梯产物：逐级实测表 + 每拍数据 + 末态核验 |
 | `experiments/b2/b2_full_course.{txt,json}` | `--demo` 的产物：四段汇总 + 36 拍实测数据 + 末态核验 |
 | `experiments/feasibility/three_robot_gait_0272.py` | 公共工具：`load_rig` / `legs_ik` / PD 循环 `Loop` / `run_plan` / `pacer` / `hold` |
 | `experiments/b2/b2_diag_stance.py` | 位姿枚举 `enumerate_poses`、非足端避碰 `filter_clear`、PD 静置 |

@@ -15,10 +15,16 @@
 
 ```powershell
 cd "D:\桌面\机器狗"
+D:\Python313\python.exe .\experiments\b2\b2_long_stair.py --view      # 任意级数：8 级爬到顶（56 步，约 3 min）
 D:\Python313\python.exe .\experiments\b2\b2_follow_gait.py --demo --view   # 完整作业流（36 步，约 173 s）
 D:\Python313\python.exe .\experiments\b2\b2_follow_gait.py --view         # 只播 20 步爬梯：1.4 s 起播、约 91 s
 D:\Python313\python.exe .\experiments\b2\b2_follow_gait.py --demo         # 完整作业流跑数据：约 7 s（读缓存）
 ```
+
+**任意级数（`b2_long_stair.py`）**：场景由参数生成（`StairSpec`，级数任意），一级一个 `CLIMB_ONE_STEP`
+（4 步），主循环每轮从**实测足端高度**读当前级号、再规划这一级，直到"再往上一级是平台"。
+8 级实测 **56/56 步、全程未失稳**：四足都站上 `platform`（顶 1.773 m），机身 (3.259, 0.428, 2.193)、
+pitch 0°；峰值力矩 196%（FL_thigh 抬脚瞬间）、最大倾角 29°。详见 [`docs/B2_LONG_STAIR.md`](docs/B2_LONG_STAIR.md)。
 
 **完整作业流**（`--demo`）四段连播、中间不停：
 **平地走近 8 步**（机身 x −0.715 → −0.115，步幅 0.30）→ **按实测位姿重规划入口 6 步** → **爬梯 14 步** →
@@ -57,6 +63,9 @@ D:\Python313\python.exe .\experiments\b2\b2_follow_gait.py --demo         # 完�
 
 | 命令 | 作用 | 耗时 |
 |---|---|---|
+| `b2_long_stair.py --view` | **任意级数 3D 连播**（默认 8 级：走近 8 + 入口 6 + 6×4 级 + 登顶 10 + 平台 8 = 56 步） | 秒级起播 + 约 3 min |
+| `b2_long_stair.py --steps 6 --view` | 同样的流程跑 6 级楼梯 | 秒级起播 + 约 2.5 min |
+| `b2_long_stair.py` | 任意级数跑数据，写 `b2_long_stair.txt/.json` | 约 3 s（缓存命中） |
 | `... --demo --view` | **完整作业流 3D 连播**：走近 8 + 入口 6 + 爬梯 14 + 平台 8 = 36 步 | 2.4 s 起播 + 173 s |
 | `... --demo` | 完整作业流跑数据，写 `b2_full_course.txt/.json` | 约 7 s（缓存命中） |
 | `... --view` | 只播 20 步爬梯；`--slow` = 0.5 倍速 | 1.4 s 起播 + 91 s |
@@ -71,12 +80,14 @@ D:\Python313\python.exe .\experiments\b2\b2_follow_gait.py --demo         # 完�
 
 ```text
 机器狗/
-├─ experiments/b2/b2_follow_gait.py            ★ 主脚本（步态生成 + 两段式执行 + 报告）
+├─ experiments/b2/b2_follow_gait.py            ★ 主脚本（3 级：步态生成 + 两段式执行 + 报告）
+├─ experiments/b2/b2_long_stair.py             ★ 任意级数：StairSpec 生成场景 + 一级一循环 + REALIGN
 ├─ experiments/b2/b2_diag_stance.py            位姿枚举 / 非足端避碰 / PD 保持（被主脚本复用）
-├─ experiments/feasibility/three_robot_gait_0272.py   公共工具：rig / IK / PD 循环 / run_plan / pacer
+├─ experiments/feasibility/three_robot_gait_0272.py   公共工具：StairSpec / 场景生成 / rig / IK / run_plan
+├─ experiments/b2/b2_long_stair.{txt,json}     长楼梯产物（逐级实测表 + 每拍数据）
 ├─ experiments/b2/b2_follow_gait.{txt,json}    跑数据产物（报告 + 逐拍数据）
 ├─ experiments/b2/b2_follow_gait.png           四联过程图（起步 / 第4 / 第8 / 第12 / 第20 步）
-├─ experiments/b2/b2_follow_gait_plan*.json    规划缓存（65 KB；删了首跑要重算 6–7 min）
+├─ experiments/b2/b2_follow_gait_plan*.json    规划缓存（删了首跑要重算：走近/平台 25/10 s、入口 17 s、每级 2–4 min）
 ├─ simulations/mujoco/b2_stairs_static/scene.xml       场景：级高 0.197 / 踏面 0.272 / 宽 0.81 / μ=1.0
 ├─ simulations/mujoco/steel_stair/stair_bodies.xml     钢梯几何（三机共用同一份）
 └─ models/                                     官方模型资产：B2 / Go2 / AS2 + 钢梯 —— **不要删，留作研究**
@@ -92,7 +103,9 @@ Python 3.13（`D:\Python313\python.exe`）、MuJoCo 3.16、NumPy 2.x；依赖见
 - 纯关节 PD + 一个比例型机身位姿伺服，没有真正的姿态/力矩闭环，也没有足端力控；同一条轨迹纯开环只能走 1/14 步。
 - 每步 3 s（挪重心 1.0 + 抬腿 1.5 + 落定 0.5；入口段再慢 1.4 倍），比真机可接受的速度慢。
 - 机身只按 pitch 参数化，yaw/横向没有闭环。
-- 没有真机标定、质量/摩擦域随机化或安全盾；目前只到第一段楼梯的平台，还没连爬多段。
+- 没有真机标定、质量/摩擦域随机化或安全盾；单跑一段楼梯（8 级）到平台，还没连爬多段（楼梯—平台—下一段楼梯）。
+- "登顶检测"用的是场景几何查询（场景由本程序生成），不是感知；上真机要换成高度图 + 里程计。
+- 第一次跑每条楼梯要逐级现规划（每级 2–4 min），之后按「规划链状态 + 局部几何」读缓存秒开。
 
 ## 历史阶段（保留，不参与当前链路）
 

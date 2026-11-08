@@ -149,6 +149,164 @@ class Rig:
         return float(self.model.body_subtreemass[1])
 
 
+class StairSpec:
+    """钢梯几何参数：级高 / 踏面深 / 梯宽 / 第 1 级后沿 / 级数 / 平台深。
+
+    场景（生成 XML）和规划器（落点、级号、高度）都只从这里取数，不再散落常量 ——
+    所以"3 级"和"8 级"是同一个 spec 换一个 n_steps，代码里没有第二处要改。
+    默认值 = 2026-11-07 现场实测的钢梯：0.197 / 0.272 / 0.81，3 级 + 2 m 平台。
+    """
+
+    def __init__(self, rise: float = RISE, tread: float = TREAD, width: float = 0.81,
+                 rear0: float = 0.2166, n_steps: int = 3, plat_len: float = 2.0,
+                 y0: float = BODY_Y):
+        self.rise, self.tread, self.width = float(rise), float(tread), float(width)
+        self.rear0, self.n_steps = float(rear0), int(n_steps)
+        self.plat_len, self.y0 = float(plat_len), float(y0)
+
+    @property
+    def top_level(self) -> int:
+        """平台的级号：3 级楼梯的平台是第 4 级，8 级楼梯的平台是第 9 级。"""
+        return self.n_steps + 1
+
+    def top(self, level: int) -> float:
+        """第 level 级的顶面高度（level ≤ 0 是地面，超过平台按平台算）。
+
+        取 9 位小数：级高 0.197 乘 3 在浮点里不保证正好是 0.591，留着 1 ulp 的差别会让
+        位姿搜索的网格整体错开一点点 —— 已经跑通的轨迹经不起这种"看不见的平移"。
+        """
+        if level <= 0:
+            return 0.0
+        return round(self.rise * min(int(level), self.top_level), 9)
+
+    def rear_x(self, level: int) -> float:
+        """第 level 级的后沿（低端）x。"""
+        return self.rear0 + self.tread * (level - 1)
+
+    def depth(self, level: int) -> float:
+        """走面深度：普通级是踏面深，平台是 plat_len。"""
+        return self.plat_len if level >= self.top_level else self.tread
+
+    def key(self) -> tuple:
+        return (round(self.rise, 4), round(self.tread, 4), round(self.width, 4),
+                round(self.rear0, 4), self.n_steps, round(self.plat_len, 4))
+
+    def local_key(self) -> tuple:
+        """只管"一级台阶本身"的几何。单级攀爬的落点只依赖这些，与总级数无关，
+        所以 6 级和 8 级楼梯的第 3 级可以用同一份规划缓存。"""
+        return (round(self.rise, 4), round(self.tread, 4), round(self.width, 4),
+                round(self.rear0, 4))
+
+    def __repr__(self) -> str:
+        return (f"StairSpec({self.n_steps} 级：级高 {self.rise:.3f} 踏面 {self.tread:.3f} "
+                f"宽 {self.width:.3f} 后沿 {self.rear0:.4f} 平台 {self.plat_len:.2f} m，"
+                f"顶 {self.top(self.top_level):.3f} m)")
+
+    @classmethod
+    def from_model(cls, model: mujoco.MjModel) -> "StairSpec":
+        """从**编译后**的模型反算几何（不读 XML 文本）：踏板按高度分组，最宽的那块是平台。"""
+        boxes = []
+        for g in range(model.ngeom):
+            if not model.geom_contype[g] or model.geom_type[g] != mujoco.mjtGeom.mjGEOM_BOX:
+                continue
+            body = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY,
+                                     int(model.geom_bodyid[g])) or ""
+            if "stair" not in body:
+                continue
+            px, py, pz = (float(v) for v in model.geom_pos[g])
+            sx, sy, sz = (float(v) for v in model.geom_size[g])
+            boxes.append({"top": pz + sz, "rear": px - sx, "front": px + sx,
+                          "half_w": sy, "y": py, "name": mujoco.mj_id2name(
+                              model, mujoco.mjtObj.mjOBJ_GEOM, g) or f"geom{g}"})
+        if not boxes:
+            raise RuntimeError("模型里找不到楼梯踏板（body 名含 'stair' 的 box）")
+        plat = max(boxes, key=lambda b: b["front"] - b["rear"])
+        steps = sorted((b for b in boxes if b is not plat), key=lambda b: b["top"])
+        if not steps:
+            raise RuntimeError("模型里只有平台、没有台阶")
+        treads = [b["front"] - b["rear"] for b in steps]
+        rises = [b["top"] - a["top"] for a, b in zip(steps, steps[1:])]
+        return cls(rise=float(np.median(rises)) if rises else RISE,
+                   tread=float(np.median(treads)), width=2.0 * steps[0]["half_w"],
+                   rear0=min(b["rear"] for b in steps), n_steps=len(steps),
+                   plat_len=plat["front"] - plat["rear"], y0=steps[0]["y"])
+
+
+def stair_bodies_xml(s: StairSpec) -> str:
+    """按 spec 生成楼梯几何（踏板 + 平台 + 两侧斜梁），取代手写的 stair_bodies.xml。
+
+    级数、级高、踏面深、宽都来自 spec，所以"6 级 / 8 级"只是改 StairSpec.n_steps。
+    摩擦仍写 1.0（MuJoCo 取逐元素最大 → 实际 μ=1.0，见 docs/INDEX.md 的物理口径）。
+    """
+    fr = 'friction="1.0 0.02 0.01"'
+    out = [f'    <geom name="floor" type="plane" size="40 40 0.1" material="grid" {fr}/>',
+           '    <body name="steel_stair_collision" pos="0 0 0">']
+    for k in range(1, s.n_steps + 1):
+        rear = s.rear_x(k)
+        out.append(f'      <geom name="up_step_{k}" type="box" pos="{rear + s.tread / 2:.6f} '
+                   f'{s.y0:.6f} {s.top(k) - 0.010:.6f}" size="{s.tread / 2:.6f} '
+                   f'{s.width / 2:.6f} 0.010000" material="steel" group="3" {fr}/>')
+    prear = s.rear_x(s.top_level)
+    out.append(f'      <geom name="platform" type="box" pos="{prear + s.plat_len / 2:.6f} '
+               f'{s.y0:.6f} {s.top(s.top_level) - 0.010:.6f}" size="{s.plat_len / 2:.6f} '
+               f'{s.width / 2:.6f} 0.010000" material="steel" group="3" {fr}/>')
+    # 两侧斜梁：纯视觉（contype=0），沿楼梯坡度倾斜，让长楼梯看着像钢梯而不是浮着的板
+    run = s.tread * s.n_steps
+    half = 0.5 * math.hypot(run, s.rise * s.n_steps) + 0.06
+    h = 0.5 * math.atan2(s.rise * s.n_steps, run)
+    for name, sy in (("stringer_left", -1.0), ("stringer_right", 1.0)):
+        out.append(f'      <geom name="{name}" type="box" '
+                   f'pos="{s.rear0 + run / 2:.6f} {s.y0 + sy * (s.width / 2 - 0.007):.6f} '
+                   f'{s.top(s.n_steps) / 2:.6f}" size="{half:.6f} 0.020000 0.045000" '
+                   f'quat="{math.cos(h):.6f} 0 {-math.sin(h):.6f} 0" material="steel" '
+                   f'group="1" contype="0" conaffinity="0"/>')
+    out.append('    </body>')
+    return "\n".join(out)
+
+
+def b2_stairs_scene_xml(s: StairSpec) -> str:
+    """B2 + 任意级数钢梯的完整 scene（按 spec 生成，不再需要手写 XML 文件）。
+
+    路径与 simulations/mujoco/b2_stairs_static/scene.xml 同口径，所以调用方要把工作目录
+    切到那个目录再编译（MuJoCo 的 from_xml_string 按当前工作目录解析 include/meshdir）。
+    """
+    center = s.rear0 + s.tread * s.n_steps / 2.0
+    return f"""<mujoco model="B2 on open steel stair, {s.n_steps} steps (generated from StairSpec)">
+  <include file="../../../models/unitree_b2_mujoco/xml/b2.xml"/>
+  <compiler angle="radian" meshdir="../../../models/unitree_b2_mujoco/meshes" autolimits="true"/>
+  <visual>
+    <global offwidth="1280" offheight="720" azimuth="145" elevation="-22"/>
+    <headlight ambient="0.35 0.35 0.35" diffuse="0.7 0.7 0.7" specular="0.25 0.25 0.25"/>
+    <rgba haze="0.12 0.18 0.24 1"/>
+    <map znear="0.02" zfar="100"/>
+  </visual>
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1="0.28 0.42 0.58" rgb2="0.03 0.05 0.08" width="512" height="3072"/>
+    <texture name="grid" type="2d" builtin="checker" width="512" height="512"
+             rgb1="0.16 0.18 0.20" rgb2="0.22 0.24 0.26"/>
+    <material name="grid" texture="grid" texrepeat="12 12" reflectance="0.05"/>
+    <material name="steel" rgba="0.42 0.48 0.54 1" specular="0.75" shininess="0.7" reflectance="0.2"/>
+  </asset>
+  <worldbody>
+    <light name="key" pos="2.0 -2.5 6.0" dir="0 0 -1" directional="true"/>
+{stair_bodies_xml(s)}
+  </worldbody>
+  <statistic center="{center:.3f} {s.y0:.3f} {s.top(s.top_level) / 2:.3f}" extent="{s.tread * s.n_steps + 4.0:.2f}"/>
+</mujoco>
+"""
+
+
+def load_rig_xml(key: str, xml: str, base_dir: Path) -> Rig:
+    """从 XML 字符串编译场景（路径按 base_dir 解析）——用于按 StairSpec 动态生成的长楼梯。"""
+    prev = Path.cwd()
+    os.chdir(base_dir)
+    try:
+        model = mujoco.MjModel.from_xml_string(xml)
+    finally:
+        os.chdir(prev)
+    return rig_from_model(key, model)
+
+
 def load_rig(key: str, scene: Path | None = None) -> Rig:
     scene = scene or ROOT / "simulations" / "mujoco" / f"{key}_stairs_static" / "scene.xml"
     prev = Path.cwd()
@@ -157,6 +315,10 @@ def load_rig(key: str, scene: Path | None = None) -> Rig:
         model = mujoco.MjModel.from_xml_path(scene.name)
     finally:
         os.chdir(prev)
+    return rig_from_model(key, model)
+
+
+def rig_from_model(key: str, model: mujoco.MjModel) -> Rig:
     data = mujoco.MjData(model)
 
     hip, foot_y, ty = {}, {}, {}
